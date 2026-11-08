@@ -5,7 +5,25 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Virtual environments
 .venv
+
+# Secrets
 .env
+.env.*
+!.env.example
+
+# Generated runtime data
+/data/raw/
+/data/processed/
+/data/analysis/
+/data/classifications/
+/data/archive/
+
+# Editor / OS noise
+.DS_Store
+.vscode/

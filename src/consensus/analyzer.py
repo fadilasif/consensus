@@ -1,49 +1,93 @@
+"""Basic statistical analysis of processed video data."""
 
-import json
-from pathlib import Path
+from __future__ import annotations
 
 import pandas as pd
 
-
-BASE_DIR = Path(__file__).resolve().parent
-PROCESSED_DIR = BASE_DIR / "data" / "processed"
-ANALYSIS_DIR = BASE_DIR / "data" / "analysis"
+from . import paths
+from .errors import DataError
+from .storage import read_json, write_json_atomic
+from .validation import safe_video_path, sanitize_terminal_text
 
 
 def load_processed_data(video_id):
     """Load processed video data."""
 
-    file_path = PROCESSED_DIR / f"{video_id}.json"
+    file_path = safe_video_path(paths.get_processed_dir(), video_id)
+    data = read_json(file_path)
 
-    with open(file_path, "r", encoding="utf-8") as file:
-        return json.load(file)
+    if not isinstance(data, dict):
+        raise DataError("Processed video data must be a JSON object.")
+
+    return data
 
 
 def create_dataframe(data):
     """Create a DataFrame containing top-level comments and nested replies."""
 
-    return pd.DataFrame(data["comments"])
+    comments = data.get("comments", [])
+
+    if not isinstance(comments, list):
+        comments = []
+
+    if not comments:
+        return pd.DataFrame(columns=["comment", "likes", "replies"])
+
+    comments_df = pd.DataFrame(comments)
+
+    if "comment" not in comments_df.columns:
+        comments_df["comment"] = ""
+
+    if "likes" not in comments_df.columns:
+        comments_df["likes"] = 0
+
+    comments_df["likes"] = (
+        pd.to_numeric(comments_df["likes"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+
+    if "replies" not in comments_df.columns:
+        comments_df["replies"] = [[] for _ in range(len(comments_df))]
+
+    comments_df["replies"] = comments_df["replies"].apply(
+        lambda value: value if isinstance(value, list) else []
+    )
+
+    return comments_df
 
 
 def analyse_video(data, comments_df):
     """Calculate basic video statistics."""
 
-    video = data["video"]
+    video = data.get("video", {})
+    if not isinstance(video, dict):
+        video = {}
+
+    if "replies" in comments_df.columns:
+        total_replies = int(comments_df["replies"].apply(len).sum())
+    else:
+        total_replies = 0
 
     return {
-        "title": video["title"],
-        "views": video["views"],
-        "video_likes": video["likes"],
+        "title": video.get("title"),
+        "views": video.get("views", 0),
+        "video_likes": video.get("likes", 0),
         "total_comments": len(comments_df),
-        "total_replies": int(comments_df["replies"].apply(len).sum())
+        "total_replies": total_replies,
     }
 
 
 def analyse_comments(comments_df):
     """Calculate top-level comment statistics."""
 
-    likes = comments_df["likes"]
     total_comments = len(comments_df)
+
+    if total_comments == 0:
+        likes = pd.Series(dtype="int64")
+    else:
+        likes = comments_df["likes"]
+
     liked_comments = int((likes > 0).sum())
 
     return {
@@ -58,32 +102,49 @@ def analyse_comments(comments_df):
             "unliked_comments": total_comments - liked_comments,
             "liked_percentage": round(
                 liked_comments / total_comments * 100, 2
-            ) if total_comments else 0
+            ) if total_comments else 0,
         },
         "top_comments": (
             comments_df.nlargest(10, "likes")[["comment", "likes"]]
             .to_dict(orient="records")
-        )
+            if total_comments else []
+        ),
     }
 
 
 def analyse_replies(comments_df):
     """Calculate reply engagement statistics."""
 
+    if "replies" not in comments_df.columns:
+        return {
+            "total_replies": 0,
+            "likes": None,
+        }
+
     all_replies = [
         reply
         for replies in comments_df["replies"]
+        if isinstance(replies, list)
         for reply in replies
+        if isinstance(reply, dict)
     ]
 
     if not all_replies:
         return {
             "total_replies": 0,
-            "likes": None
+            "likes": None,
         }
 
     replies_df = pd.DataFrame(all_replies)
-    likes = replies_df["likes"]
+
+    if "likes" not in replies_df.columns:
+        replies_df["likes"] = 0
+
+    likes = (
+        pd.to_numeric(replies_df["likes"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
 
     total_replies = len(replies_df)
     liked_replies = int((likes > 0).sum())
@@ -100,15 +161,20 @@ def analyse_replies(comments_df):
             "unliked_replies": total_replies - liked_replies,
             "liked_percentage": round(
                 liked_replies / total_replies * 100, 2
-            )
-        }
+            ),
+        },
     }
 
 
 def analyse_reply_distribution(comments_df):
     """Calculate reply distribution across top-level comments."""
 
-    reply_counts = comments_df["replies"].apply(len)
+    if "replies" in comments_df.columns:
+        reply_counts = comments_df["replies"].apply(
+            lambda value: len(value) if isinstance(value, list) else 0
+        )
+    else:
+        reply_counts = pd.Series(dtype="int64")
 
     total_comments = len(comments_df)
     comments_with_replies = int((reply_counts > 0).sum())
@@ -123,22 +189,20 @@ def analyse_reply_distribution(comments_df):
         "comments_without_replies": total_comments - comments_with_replies,
         "percentage_with_replies": round(
             comments_with_replies / total_comments * 100, 2
-        ) if total_comments else 0
+        ) if total_comments else 0,
     }
 
 
 def save_analysis(video_id, results):
     """Save complete analysis results as JSON."""
 
-    ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+    paths.ensure_data_dirs()
 
-    file_path = ANALYSIS_DIR / f"{video_id}.json"
+    file_path = safe_video_path(paths.get_analysis_dir(), video_id)
 
-    with open(file_path, "w", encoding="utf-8") as file:
-        json.dump(results, file, indent=4, ensure_ascii=False)
+    write_json_atomic(file_path, results, indent=4)
 
     return file_path
-
 
 
 def analyse_video_data(video_id):
@@ -151,7 +215,7 @@ def analyse_video_data(video_id):
         "video": analyse_video(data, comments_df),
         "comments": analyse_comments(comments_df),
         "replies": analyse_replies(comments_df),
-        "reply_distribution": analyse_reply_distribution(comments_df)
+        "reply_distribution": analyse_reply_distribution(comments_df),
     }
 
     analysis_path = save_analysis(video_id, results)
@@ -160,7 +224,7 @@ def analyse_video_data(video_id):
     summary = results["video"]
 
     print("\n========== VIDEO DETAILS ==========")
-    print("Title:", summary["title"])
+    print("Title:", sanitize_terminal_text(summary["title"]))
     print("Views:", summary["views"])
     print("Video Likes:", summary["video_likes"])
     print("Total Comments:", summary["total_comments"])
@@ -170,12 +234,15 @@ def analyse_video_data(video_id):
     print("\n========== TOP 10 COMMENTS ==========")
 
     for comment in results["comments"]["top_comments"]:
-        print(f"{comment['likes']:,} likes | {comment['comment']}")
+        print(
+            f"{comment['likes']:,} likes | "
+            f"{sanitize_terminal_text(comment['comment'])}"
+        )
 
     print(f"\nFull analysis saved: {analysis_path}")
 
     return {
         "summary": summary,
         "top_comments": results["comments"]["top_comments"],
-        "analysis_path": analysis_path
+        "analysis_path": analysis_path,
     }

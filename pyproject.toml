@@ -1,13 +1,14 @@
 [project]
 name = "consensus"
 version = "0.1.0"
-description = "Add your description here"
+description = "YouTube audience intelligence: collect comments, analyse engagement and classify audience stance."
 readme = "README.md"
 authors = [
     { name = "fadilasif", email = "fadilasiftech@gmail.com" }
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "beautifulsoup4>=4.13.0",
     "google-genai>=3.0.0",
     "groq>=1.7.0",
     "matplotlib>=3.11.2",
@@ -18,7 +19,8 @@ dependencies = [
 ]
 
 [project.scripts]
-consensus = "consensus:main"
+consensus = "consensus.main:main"
+consensus-migrate = "consensus.migrate:main"
 
 [build-system]
 requires = ["uv_build>=0.13.7,<0.14.0"]
@@ -28,4 +30,9 @@ build-backend = "uv_build"
 dev = [
     "ipykernel>=7.4.0",
     "jupyterlab>=4.6.6",
+    "pytest>=8.4.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

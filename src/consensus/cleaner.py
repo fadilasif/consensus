@@ -1,14 +1,16 @@
+"""Clean raw YouTube text while preserving meaning."""
 
-import json
-import re
+from __future__ import annotations
+
 import html
-from pathlib import Path
+import re
+
 from bs4 import BeautifulSoup
 
-
-BASE_DIR = Path(__file__).resolve().parent
-RAW_DIR = BASE_DIR / "data" / "raw"
-PROCESSED_DIR = BASE_DIR / "data" / "processed"
+from . import paths
+from .errors import DataError
+from .storage import read_json, write_json_atomic
+from .validation import safe_video_path, sanitize_terminal_text
 
 
 def clean_text(text):
@@ -23,8 +25,9 @@ def clean_text(text):
     # Remove HTML tags while preserving their text
     text = BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
 
-    # Remove zero-width spaces
+    # Remove zero-width spaces and terminal control characters
     text = text.replace("\u200b", "")
+    text = sanitize_terminal_text(text)
 
     # Normalize whitespace
     text = re.sub(r"\s+", " ", text).strip()
@@ -37,30 +40,42 @@ def clean_comments(comments):
 
     cleaned_comments = []
 
-    for comment in comments:
-        cleaned_text = clean_text(comment["comment"])
+    if not isinstance(comments, list):
+        return cleaned_comments
 
-        # Skip comments that become empty
-        if not cleaned_text:
+    for comment in comments:
+        if not isinstance(comment, dict):
             continue
+
+        cleaned_text = clean_text(comment.get("comment"))
+
+        if not isinstance(cleaned_text, str) or not cleaned_text:
+            continue
+
+        raw_replies = comment.get("replies", [])
+        if not isinstance(raw_replies, list):
+            raw_replies = []
 
         cleaned_replies = []
 
-        for reply in comment.get("replies", []):
-            cleaned_reply = clean_text(reply["comment"])
+        for reply in raw_replies:
+            if not isinstance(reply, dict):
+                continue
 
-            if not cleaned_reply:
+            cleaned_reply = clean_text(reply.get("comment"))
+
+            if not isinstance(cleaned_reply, str) or not cleaned_reply:
                 continue
 
             cleaned_replies.append({
                 **reply,
-                "comment": cleaned_reply
+                "comment": cleaned_reply,
             })
 
         cleaned_comments.append({
             **comment,
             "comment": cleaned_text,
-            "replies": cleaned_replies
+            "replies": cleaned_replies,
         })
 
     return cleaned_comments
@@ -69,33 +84,30 @@ def clean_comments(comments):
 def clean_video_data(video_id):
     """Load raw data, clean it, and save the processed dataset."""
 
-    raw_path = RAW_DIR / f"{video_id}.json"
+    paths.ensure_data_dirs()
 
-    with open(raw_path, "r", encoding="utf-8") as file:
-        raw_data = json.load(file)
+    raw_path = safe_video_path(paths.get_raw_dir(), video_id)
+    raw_data = read_json(raw_path)
+
+    if not isinstance(raw_data, dict):
+        raise DataError("Raw video data must be a JSON object.")
 
     video = raw_data.get("video", {})
+    if not isinstance(video, dict):
+        video = {}
 
     processed_data = {
         **raw_data,
         "video": {
             **video,
             "title": clean_text(video.get("title")),
-            "description": clean_text(video.get("description"))
+            "description": clean_text(video.get("description")),
         },
-        "comments": clean_comments(raw_data.get("comments", []))
+        "comments": clean_comments(raw_data.get("comments", [])),
     }
 
-    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    processed_path = safe_video_path(paths.get_processed_dir(), video_id)
 
-    processed_path = PROCESSED_DIR / f"{video_id}.json"
-
-    with open(processed_path, "w", encoding="utf-8") as file:
-        json.dump(
-            processed_data,
-            file,
-            indent=4,
-            ensure_ascii=False
-        )
+    write_json_atomic(processed_path, processed_data, indent=4)
 
     return processed_path
