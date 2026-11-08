@@ -1,51 +1,88 @@
-# Consensus
+# 🎯 Consensus
 
-Consensus is a YouTube audience-intelligence pipeline. It collects a video's
-comments, cleans and analyses them, then uses an LLM-generated framework to
-classify **top-level comments** against your research question.
+**Ask a question about a YouTube video. Get back what its audience actually thinks.**
 
-The pipeline produces four classification artifacts per video and question:
+Consensus collects a video's comments, cleans and analyses them, then uses an
+LLM-generated framework to classify every **top-level comment** against *your*
+research question, for example *"Should I buy the iPhone 18 Pro or wait for the
+next model?"*. The result is a per-comment classification plus an aggregated
+view of where the audience stands.
 
-1. individual classification results
-2. an aggregation summary
-3. the generated classification framework
-4. run metadata (signature, model settings, token/request metrics)
+---
 
-## Requirements
+## 📑 Contents
+
+- ⚙️ [How it works](#how-it-works)
+- 🚀 [Quick start](#quick-start)
+- 🔧 [Configuration](#configuration)
+- 💬 [Usage](#usage)
+- 📦 [Output artifacts](#output-artifacts)
+- 🔄 [Resuming interrupted runs](#resuming-interrupted-runs)
+- 🗂️ [Where data is stored](#where-data-is-stored)
+- 🚚 [Migrating existing data](#migrating-existing-data)
+- 🛠️ [Development](#development)
+- 🔒 [Security](#security)
+- 🩺 [Troubleshooting](#troubleshooting)
+
+---
+
+<a id="how-it-works"></a>
+
+## ⚙️ How it works
+
+```mermaid
+flowchart LR
+    A[YouTube URL<br/>+ research question] --> B[Validate video ID]
+    B --> C[Fetch details<br/>and comments]
+    C --> D[Save raw data]
+    D --> E[Clean comments]
+    E --> F[Engagement<br/>statistics]
+    F --> G[Generate question-specific<br/>framework]
+    G --> H[Classify top-level<br/>comments in batches]
+    H --> I[Write four<br/>artifacts]
+```
+
+1. 📥 **Collect:** fetches video details and comments from the YouTube Data API
+   v3, with bounded retries.
+2. 🧹 **Prepare:** saves the raw responses, cleans the comments and computes
+   engagement statistics.
+3. 🧠 **Frame:** generates a classification framework tailored to your question
+   (categories, definitions and instructions) using an LLM.
+4. 🏷️ **Classify:** assigns each top-level comment to a category, checkpointing
+   after every successful batch.
+5. 📊 **Report:** writes individual results, an aggregation summary, the
+   framework and run metadata.
+
+> 💡 **Population:** only **top-level comments** are classified. Replies are
+> collected, counted and reported, but never sent to the classifier. This keeps
+> the methodology consistent across runs.
+
+---
+
+<a id="quick-start"></a>
+
+## 🚀 Quick start
+
+**📋 Requirements**
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
-- API keys for:
-  - YouTube Data API v3 (`YOUTUBE_API_KEY`)
-  - SubQ (`SUBQ_API_KEY`)
-  - Groq (`GROQ_API_KEY`)
+- API keys for YouTube Data API v3, SubQ and Groq
 
-## Installation
-
-From a source checkout:
+**⬇️ Install**
 
 ```bash
+# from a source checkout
 uv sync
+
+# or install the package
+uv pip install .        # or: pip install .
 ```
 
-Or install the package:
+This installs two console scripts: `consensus` (the pipeline) and
+`consensus-migrate` (a data-migration helper).
 
-```bash
-uv pip install .
-# or
-pip install .
-```
-
-Both the CLI and a data-migration helper are installed as console scripts:
-
-```bash
-consensus
-consensus-migrate --help
-```
-
-## Environment setup
-
-Copy the example file and add your keys:
+**🔐 Add your keys**
 
 ```bash
 cp .env.example .env
@@ -57,64 +94,53 @@ SUBQ_API_KEY=...
 GROQ_API_KEY=...
 ```
 
-`.env` is ignored by Git. Never commit real keys. The application loads the
-file lazily at runtime, so importing the package never requires credentials.
-Source checkouts read `<project>/.env`; an installed package reads the
-per-user config directory (for example `~/.config/consensus/.env` on Linux).
-Set `CONSENSUS_ENV_FILE` to point at a specific file.
+**▶️ Run**
 
-Environment variables may also be exported directly. Real environment
-variables take precedence over values in `.env`.
+```bash
+consensus
+```
 
-### Optional overrides
+Paste a YouTube URL, type your research question, and wait for the artifacts.
+
+---
+
+<a id="configuration"></a>
+
+## 🔧 Configuration
+
+### 🔑 Credentials
+
+| Variable | Used for |
+| --- | --- |
+| `YOUTUBE_API_KEY` | Fetching video details and comments |
+| `SUBQ_API_KEY` | Comment classification |
+| `GROQ_API_KEY` | Framework generation |
+
+Keys are loaded lazily at runtime, so importing the package never requires
+credentials. Real environment variables take precedence over values in `.env`.
+
+⚠️ `.env` is ignored by Git. Never commit real keys.
+
+**📍 Where the `.env` file is read from**
+
+| How you run Consensus | Default location |
+| --- | --- |
+| Source checkout | `<project>/.env` |
+| Installed package | Per-user config directory, e.g. `~/.config/consensus/.env` on Linux |
+| `CONSENSUS_ENV_FILE` set | That file, always |
+
+### 🎛️ Optional overrides
 
 | Variable | Purpose |
 | --- | --- |
 | `CONSENSUS_DATA_DIR` | Use a custom data directory. Highest priority. |
 | `CONSENSUS_ENV_FILE` | Load credentials from a specific `.env` file. |
 
-## Where data is stored
+---
 
-The active data directory depends on how Consensus is run:
+<a id="usage"></a>
 
-- **Source checkout:** `<project>/data`
-- **Installed package:** the platform user-data directory
-  (`~/.local/share/consensus` on Linux, `~/Library/Application Support/consensus`
-  on macOS, `%LOCALAPPDATA%\consensus` on Windows)
-- **`CONSENSUS_DATA_DIR` set:** that directory, always
-
-The tree contains:
-
-```text
-data/
-  raw/              # raw YouTube API responses
-  processed/        # cleaned comments
-  analysis/         # engagement statistics
-  classifications/  # results, aggregation, framework, metadata, checkpoints
-```
-
-## Migrating existing data
-
-If you previously stored data inside `src/consensus/data`, copy it safely:
-
-```bash
-consensus-migrate --dry-run   # show what would be copied
-consensus-migrate             # copy with hash verification
-```
-
-Migration rules:
-
-- existing target files are **never overwritten**
-- identical files are skipped
-- conflicting files are reported, not replaced
-- source files are never deleted
-- every copied file is hash-verified
-
-Use `--source` and `--target` to migrate between custom locations.
-
-## Usage
-
-Run the interactive pipeline:
+## 💬 Usage
 
 ```bash
 consensus
@@ -122,66 +148,140 @@ consensus
 
 You will be asked for:
 
-1. a YouTube URL (`watch`, `shorts`, `embed`, `live`, `youtu.be`)
-2. a research question
+1. **A YouTube URL.** `watch`, `shorts`, `embed`, `live` and `youtu.be` links
+   are all accepted.
+2. **A research question.** Be specific about the decision or opinion you want
+   to understand. The framework is built around it.
 
-The pipeline then:
+Different questions for the same video are stored separately and never
+overwrite each other, so you can ask as many as you like.
 
-1. validates the video ID
-2. fetches video details and comments (with bounded retries)
-3. saves raw data
-4. cleans comments
-5. computes engagement statistics
-6. classifies top-level comments
-7. writes the four classification artifacts
+---
 
-### Classification population
+<a id="output-artifacts"></a>
 
-Only **top-level comments** are classified. Replies are collected, counted and
-reported, but they are not sent to the classifier. This preserves the existing
-methodology.
+## 📦 Output artifacts
 
-### Resume behaviour
+For a video `VIDEOID` and question key `KEY`, Consensus writes to
+`data/classifications/`:
 
-Runs resume automatically when the video, research question, comment set,
-framework, prompts, models and classification settings all match the saved run
-signature. A checkpoint journal is appended after every successful batch, so an
-interrupted run does not lose completed work.
+| File | Contents |
+| --- | --- |
+| `VIDEOID_KEY.json` | Individual classification results |
+| `VIDEOID_KEY_aggregation.json` | Aggregation summary |
+| `VIDEOID_KEY_framework.json` | The generated classification framework |
+| `VIDEOID_KEY_run_metadata.json` | Run signature, model settings, token and request metrics |
+| `VIDEOID_KEY_<signature>.jsonl` | Append-only checkpoint journal |
 
-If a batch fails, successful batches are still checkpointed and the run exits
-with a clear error. Re-running the same question resumes from the journal.
+---
 
-Different research questions for the same video are stored under separate
-question-keyed filenames and never overwrite each other. If the inputs for the
-same question change, the previous artifacts are archived (hash-verified copy)
-before the new run writes its files.
+<a id="resuming-interrupted-runs"></a>
 
-## Output artifacts
+## 🔄 Resuming interrupted runs
 
-For a video `VIDEOID` and question key `KEY`:
+Runs resume automatically when **all** of the following match the saved run
+signature:
+
+- video
+- research question
+- comment set
+- framework
+- prompts
+- models
+- classification settings
+
+**How it behaves:**
+
+- 💾 A checkpoint is appended to the journal after every successful batch, so an
+  interrupted run keeps its completed work.
+- ❌ If a batch fails, successful batches stay checkpointed and the run exits with
+  a clear error. Re-run the same question to resume from the journal.
+- 🗄️ If the inputs for the same question **change**, the previous artifacts are
+  archived (hash-verified copy) before the new run writes its files.
+
+---
+
+<a id="where-data-is-stored"></a>
+
+## 🗂️ Where data is stored
+
+| How you run Consensus | Data directory |
+| --- | --- |
+| `CONSENSUS_DATA_DIR` set | That directory, always |
+| Source checkout | `<project>/data` |
+| Installed package, Linux | `~/.local/share/consensus` |
+| Installed package, macOS | `~/Library/Application Support/consensus` |
+| Installed package, Windows | `%LOCALAPPDATA%\consensus` |
 
 ```text
-data/classifications/
-  VIDEOID_KEY.json                      # individual results
-  VIDEOID_KEY_aggregation.json          # aggregation summary
-  VIDEOID_KEY_framework.json            # classification framework
-  VIDEOID_KEY_run_metadata.json         # run metadata
-  VIDEOID_KEY_<signature>.jsonl         # append-only checkpoint journal
+data/
+  raw/              raw YouTube API responses
+  processed/        cleaned comments
+  analysis/         engagement statistics
+  classifications/  results, aggregation, framework, metadata, checkpoints
 ```
 
-## Development
+---
+
+<a id="migrating-existing-data"></a>
+
+## 🚚 Migrating existing data
+
+If you previously stored data inside `src/consensus/data`, copy it with the
+migration helper:
+
+```bash
+consensus-migrate --dry-run   # show what would be copied
+consensus-migrate             # copy with hash verification
+```
+
+Use `--source` and `--target` to migrate between custom locations, and
+`consensus-migrate --help` for all options.
+
+**🛡️ Safety guarantees**
+
+- ✅ Existing target files are never overwritten.
+- ✅ Identical files are skipped.
+- ✅ Conflicting files are reported, not replaced.
+- ✅ Source files are never deleted.
+- ✅ Every copied file is hash-verified.
+
+---
+
+<a id="development"></a>
+
+## 🛠️ Development
 
 ```bash
 uv sync --group dev
 uv run pytest
 ```
 
-Tests mock all providers and never make paid API requests.
+🧪 Tests mock all providers and never make paid API requests.
 
-## Security notes
+---
 
-- API keys are read lazily and are redacted from error messages.
-- YouTube video IDs are validated before being used in file paths or API calls.
-- Terminal control characters are stripped from untrusted comment text.
-- Comment text is passed to models as quoted, untrusted data with explicit
+<a id="security"></a>
+
+## 🔒 Security
+
+- 🔑 API keys are read lazily and redacted from error messages.
+- 🆔 YouTube video IDs are validated before they are used in file paths or API
+  calls.
+- 🖥️ Terminal control characters are stripped from untrusted comment text.
+- 🧱 Comment text is passed to models as quoted, untrusted data, with explicit
   instructions not to follow instructions found inside comments.
+
+---
+
+<a id="troubleshooting"></a>
+
+## 🩺 Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Error about a missing API key | Confirm all three keys are set in the `.env` file Consensus is reading (see [Configuration](#configuration)), or exported as environment variables. |
+| Run stops partway with a batch error | Re-run with the same video and question. Completed batches are checkpointed and the run resumes. |
+| Run starts from scratch unexpectedly | Something in the run signature changed (comment set, prompts, models or settings). The previous artifacts were archived, not lost. |
+| Can't find your output files | Check which data directory is active (see [Where data is stored](#where-data-is-stored)). |
+| Old data missing after upgrading | Run `consensus-migrate --dry-run`, then `consensus-migrate`. |
