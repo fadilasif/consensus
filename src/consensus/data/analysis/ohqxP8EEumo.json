@@ -1,0 +1,87 @@
+{
+    "video": {
+        "title": "iPhone 18 Pro Review: All About that Chip",
+        "views": 12272917,
+        "video_likes": 164900,
+        "total_comments": 6851,
+        "total_replies": 822
+    },
+    "comments": {
+        "total_comments": 6851,
+        "likes": {
+            "mean": 10.509414683987739,
+            "median": 0.0,
+            "std": 324.56603348753634,
+            "min": 0,
+            "max": 21300,
+            "liked_comments": 1073,
+            "unliked_comments": 5778,
+            "liked_percentage": 15.66
+        },
+        "top_comments": [
+            {
+                "comment": "Of course, he had it for a year.",
+                "likes": 21300
+            },
+            {
+                "comment": "Thanks, Marques. I will wait another year.",
+                "likes": 12261
+            },
+            {
+                "comment": "Don't you love it when the sponsor is at the end of the video? It's really annoying if it's in the middle of the video",
+                "likes": 5669
+            },
+            {
+                "comment": "Can't wait for the iPhone Duo review",
+                "likes": 5613
+            },
+            {
+                "comment": "I always enjoy watching things I can't afford",
+                "likes": 4503
+            },
+            {
+                "comment": "Beating the M5 in single core performance. Absolutely insane",
+                "likes": 4407
+            },
+            {
+                "comment": "As a photography nerd, that demonstration of what the aperture actually does in real time was super slick 👏",
+                "likes": 2946
+            },
+            {
+                "comment": "The spiderman meme in the background 😂 great touch!",
+                "likes": 1637
+            },
+            {
+                "comment": "\"I said its underated but not underpriced \", perfectly sums up man",
+                "likes": 962
+            },
+            {
+                "comment": "Don’t you love it when the sponsor is at the end of the video, it’s genuinely so annoying if it’s in the middle of the video",
+                "likes": 613
+            }
+        ]
+    },
+    "replies": {
+        "total_replies": 822,
+        "likes": {
+            "mean": 3.723844282238443,
+            "median": 0.0,
+            "std": 21.799951744073475,
+            "min": 0,
+            "max": 385,
+            "liked_replies": 370,
+            "unliked_replies": 452,
+            "liked_percentage": 45.01
+        }
+    },
+    "reply_distribution": {
+        "mean": 0.11998248430886002,
+        "median": 0.0,
+        "std": 0.5841425680766136,
+        "min": 0,
+        "max": 5,
+        "comments_with_replies": 417,
+        "comments_without_replies": 6434,
+        "percentage_with_replies": 6.09
+    }
+}

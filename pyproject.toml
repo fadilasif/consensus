@@ -1,0 +1,31 @@
+[project]
+name = "consensus"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "fadilasif", email = "fadilasiftech@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "google-genai>=3.0.0",
+    "groq>=1.7.0",
+    "matplotlib>=3.11.2",
+    "pandas>=3.1.1",
+    "python-dotenv>=1.2.4",
+    "requests>=2.34.2",
+    "tqdm>=4.70.1",
+]
+
+[project.scripts]
+consensus = "consensus:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "jupyterlab>=4.6.6",
+]
