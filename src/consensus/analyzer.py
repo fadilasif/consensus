@@ -193,6 +193,41 @@ def analyse_reply_distribution(comments_df):
     }
 
 
+def print_top_comments(comments, limit=5):
+    """Print the most-liked top-level comments in descending like order."""
+
+    records = []
+
+    for comment in comments or []:
+        if not isinstance(comment, dict):
+            continue
+
+        try:
+            likes = int(comment.get("likes", 0) or 0)
+        except (TypeError, ValueError):
+            likes = 0
+
+        records.append({
+            "comment": comment.get("comment", ""),
+            "likes": likes,
+        })
+
+    records.sort(key=lambda item: item["likes"], reverse=True)
+    records = records[:max(0, limit)]
+
+    print(f"\nTop {limit} most-liked comments")
+
+    if not records:
+        print("  No top-level comments available.")
+        return
+
+    for rank, comment in enumerate(records, start=1):
+        print(
+            f"{rank:>2}. {comment['likes']:>7,} likes  "
+            f"{sanitize_terminal_text(comment['comment'])}"
+        )
+
+
 def save_analysis(video_id, results):
     """Save complete analysis results as JSON."""
 
@@ -205,7 +240,13 @@ def save_analysis(video_id, results):
     return file_path
 
 
-def analyse_video_data(video_id):
+def analyse_video_data(
+    video_id,
+    *,
+    show_top_comments=True,
+    show_summary=True,
+    show_path=True,
+):
     """Run statistical analysis and display a concise terminal summary."""
 
     data = load_processed_data(video_id)
@@ -223,26 +264,25 @@ def analyse_video_data(video_id):
     # Display basic video details
     summary = results["video"]
 
-    print("\n========== VIDEO DETAILS ==========")
-    print("Title:", sanitize_terminal_text(summary["title"]))
-    print("Views:", summary["views"])
-    print("Video Likes:", summary["video_likes"])
-    print("Total Comments:", summary["total_comments"])
-    print("Total Replies:", summary["total_replies"])
-
-    # Display top 10 comments
-    print("\n========== TOP 10 COMMENTS ==========")
-
-    for comment in results["comments"]["top_comments"]:
+    if show_summary:
+        print("\nVideo details")
+        print("Title:", sanitize_terminal_text(summary["title"]))
         print(
-            f"{comment['likes']:,} likes | "
-            f"{sanitize_terminal_text(comment['comment'])}"
+            f"Views: {summary['views']} | Likes: {summary['video_likes']} | "
+            f"Comments: {summary['total_comments']} | "
+            f"Replies: {summary['total_replies']}"
         )
 
-    print(f"\nFull analysis saved: {analysis_path}")
+    # Display top comments
+    if show_top_comments:
+        print_top_comments(results["comments"]["top_comments"])
+
+    if show_path:
+        print(f"\nAnalysis saved: {analysis_path}")
 
     return {
         "summary": summary,
         "top_comments": results["comments"]["top_comments"],
+        "analysis": results,
         "analysis_path": analysis_path,
     }

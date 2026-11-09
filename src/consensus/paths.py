@@ -118,7 +118,7 @@ def question_key(user_question: str) -> str:
 
 
 def classification_artifact_paths(video_id: str, user_question: str) -> dict[str, Path]:
-    """Return the four preserved artifacts plus internal checkpoint paths."""
+    """Return the preserved artifacts plus internal checkpoint paths."""
 
     video_id = validate_video_id(video_id)
     base = get_classifications_dir()
@@ -132,6 +132,7 @@ def classification_artifact_paths(video_id: str, user_question: str) -> dict[str
         "aggregation": base / f"{prefix}_aggregation.json",
         "framework": base / f"{prefix}_framework.json",
         "metadata": base / f"{prefix}_run_metadata.json",
+        "report": base / f"{prefix}_report.json",
         "journal": base / f"{prefix}.jsonl",
         "lock": base / f".{prefix}.lock",
     }

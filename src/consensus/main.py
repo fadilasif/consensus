@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import logging
+import os
 from urllib.parse import parse_qs, urlparse
 
-from .analyzer import analyse_video_data
+from . import paths
+from .analyzer import analyse_video_data, print_top_comments
 from .cleaner import clean_video_data
 from .classification import run_classification
 from .collector import get_comments, get_video_details
 from .config import load_environment
-from .errors import ConsensusError
-from .storage import save_data
-from .validation import sanitize_terminal_text, validate_video_id
+from .errors import ConsensusError, DataError
+from .reporter import generate_report, print_report, save_report
+from .storage import read_json, save_data
+from .validation import validate_video_id
 
 
 def extract_video_id(video_url: str) -> str | None:
@@ -56,7 +59,47 @@ def extract_video_id(video_url: str) -> str | None:
         return None
 
 
+def _classification_run_signature(video_id: str, user_question: str) -> str:
+    """Read the signature of the classification run that just completed."""
+
+    artifact_paths = paths.classification_artifact_paths(
+        video_id,
+        user_question,
+    )
+
+    metadata = read_json(artifact_paths["metadata"])
+
+    if not isinstance(metadata, dict):
+        raise DataError("Classification metadata must be a JSON object.")
+
+    run_signature = metadata.get("run_signature")
+
+    if not isinstance(run_signature, str) or not run_signature:
+        raise DataError("Classification metadata has no run signature.")
+
+    return run_signature
+
+
+def _log_level() -> int:
+    """Return the configured log level, defaulting to warnings only."""
+
+    name = os.getenv("CONSENSUS_LOG_LEVEL", "WARNING").strip().upper()
+    level = getattr(logging, name, None)
+
+    return level if isinstance(level, int) else logging.WARNING
+
+
+def _configure_logging() -> None:
+    logging.basicConfig(
+        level=_log_level(),
+        format="%(asctime)s | %(levelname)-8s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+
 def _run_pipeline(video_id: str, user_question: str) -> int:
+    print("\nCollecting data...")
+
     # Collect video details
     details = get_video_details(video_id)
 
@@ -75,72 +118,82 @@ def _run_pipeline(video_id: str, user_question: str) -> int:
     }
 
     # Save raw data
-    raw_path = save_data(video_id, video_data)
-    print(f"Raw data saved: {raw_path}")
+    save_data(video_id, video_data)
+
+    print("Cleaning and analysing...")
 
     # Clean data
-    processed_path = clean_video_data(video_id)
-    print(f"Processed data saved: {processed_path}")
+    clean_video_data(video_id)
 
-    # Analyse processed data
-    analyse_video_data(video_id)
+    # Analyse processed data (top comments are printed after the report)
+    eda_results = analyse_video_data(
+        video_id,
+        show_top_comments=False,
+        show_summary=False,
+        show_path=False,
+    )
 
-    print("\nAnalysis completed successfully.")
+    if not isinstance(eda_results, dict):
+        raise ConsensusError(
+            "Analysis did not return the expected results."
+        )
 
-    # Classify audience comments
-    print("\nStarting audience classification...")
+    print("Classifying comments...")
 
     aggregation = run_classification(
         video_id=video_id,
         user_question=user_question,
     )
 
-    print("\nClassification completed successfully.")
+    # Prepare classification framework
+    framework = {
+        "question_interpretation": aggregation.get(
+            "question_interpretation", {}
+        ),
+        "categories": aggregation.get("categories", {}),
+    }
 
-    # Display summary
-    print("\n" + "=" * 55)
-    print("             PIPELINE COMPLETED")
-    print("=" * 55)
+    # Generate final audience intelligence report
+    print("Generating report...")
 
-    print(f"Video ID: {video_id}")
-    print(f"Top-level comments collected: {len(comments)}")
-    print(
-        "Replies collected (not classified): "
-        f"{aggregation.get('total_replies_in_video', 0)}"
+    report = generate_report(
+        user_question=user_question,
+        video={
+            **details,
+            "video_id": video_id,
+        },
+        framework=framework,
+        aggregation=aggregation,
+        eda=eda_results["analysis"],
     )
-    print(
-        "Top-level comments classified: "
-        f"{aggregation['total_comments_classified']}"
+
+    # Persist the report as the fifth question-specific artifact
+    save_report(
+        video_id=video_id,
+        user_question=user_question,
+        report=report,
+        run_signature=_classification_run_signature(
+            video_id,
+            user_question,
+        ),
     )
-    print(f"Relevant comments: {aggregation['relevant_comments']}")
-    print(f"Irrelevant comments: {aggregation['irrelevant_comments']}")
 
-    print("\nClassification distribution:")
+    print("Report saved.")
 
-    for category, values in aggregation["classification_distribution"].items():
-        print(
-            f"{sanitize_terminal_text(category):<30} "
-            f"{values['count']:>6} "
-            f"({values['percentage']:.2f}%)"
-        )
+    # Display final report
+    print_report(report)
 
-    print("\nConsensus pipeline finished successfully.")
+    # Display the most-liked top-level comments last
+    print_top_comments(eda_results["top_comments"], limit=5)
+
     return 0
 
 
 def main() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)-8s | %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
     load_environment()
+    _configure_logging()
 
-    print("\n" + "=" * 55)
-    print("                 CONSENSUS")
-    print("          YouTube Audience Intelligence")
-    print("=" * 55)
+    print("\nConsensus | YouTube Audience Intelligence")
 
     try:
         video_url = input("\nEnter YouTube link: ")

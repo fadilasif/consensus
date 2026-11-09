@@ -40,6 +40,8 @@ flowchart LR
     F --> G[Generate question-specific<br/>framework]
     G --> H[Classify top-level<br/>comments in batches]
     H --> I[Write four<br/>artifacts]
+    I --> J[Generate Groq<br/>audience report]
+    J --> K[Write report<br/>artifact]
 ```
 
 1. 📥 **Collect:** fetches video details and comments from the YouTube Data API
@@ -52,6 +54,9 @@ flowchart LR
    after every successful batch.
 5. 📊 **Report:** writes individual results, an aggregation summary, the
    framework and run metadata.
+6. 📝 **Narrate:** generates a concise, natural-language analysis from the
+   classified results, EDA and your question, then saves it as the fifth
+   artifact.
 
 > 💡 **Population:** only **top-level comments** are classified. Replies are
 > collected, counted and reported, but never sent to the classifier. This keeps
@@ -114,7 +119,7 @@ Paste a YouTube URL, type your research question, and wait for the artifacts.
 | --- | --- |
 | `YOUTUBE_API_KEY` | Fetching video details and comments |
 | `SUBQ_API_KEY` | Comment classification |
-| `GROQ_API_KEY` | Framework generation |
+| `GROQ_API_KEY` | Framework generation and the final audience report |
 
 Keys are loaded lazily at runtime, so importing the package never requires
 credentials. Real environment variables take precedence over values in `.env`.
@@ -135,6 +140,7 @@ credentials. Real environment variables take precedence over values in `.env`.
 | --- | --- |
 | `CONSENSUS_DATA_DIR` | Use a custom data directory. Highest priority. |
 | `CONSENSUS_ENV_FILE` | Load credentials from a specific `.env` file. |
+| `CONSENSUS_LOG_LEVEL` | Set the logging level, e.g. `INFO` or `DEBUG`. Defaults to `WARNING`. |
 
 ---
 
@@ -171,6 +177,7 @@ For a video `VIDEOID` and question key `KEY`, Consensus writes to
 | `VIDEOID_KEY_aggregation.json` | Aggregation summary |
 | `VIDEOID_KEY_framework.json` | The generated classification framework |
 | `VIDEOID_KEY_run_metadata.json` | Run signature, model settings, token and request metrics |
+| `VIDEOID_KEY_report.json` | Groq audience report, research question, model and classification run signature |
 | `VIDEOID_KEY_<signature>.jsonl` | Append-only checkpoint journal |
 
 ---
@@ -218,7 +225,7 @@ data/
   raw/              raw YouTube API responses
   processed/        cleaned comments
   analysis/         engagement statistics
-  classifications/  results, aggregation, framework, metadata, checkpoints
+  classifications/  results, aggregation, framework, metadata, report, checkpoints
 ```
 
 ---
@@ -271,6 +278,9 @@ uv run pytest
 - 🖥️ Terminal control characters are stripped from untrusted comment text.
 - 🧱 Comment text is passed to models as quoted, untrusted data, with explicit
   instructions not to follow instructions found inside comments.
+- 📝 The final audience report receives classified results, EDA statistics, the
+  ten most-liked top-level comments (text and likes) as supplementary evidence,
+  and your question. No other raw comment text is sent to Groq for reporting.
 
 ---
 
