@@ -22,7 +22,6 @@ htmlcov/
 /data/processed/
 /data/analysis/
 /data/classifications/
-/data/archive/
 
 # Editor / OS noise
 .DS_Store

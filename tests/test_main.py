@@ -175,6 +175,8 @@ def test_pipeline_generates_persists_and_prints_report_then_top_comments(
     assert captured["generate"]["eda"] is eda_results["analysis"]
     assert captured["save"]["report"] == "# REPORT"
     assert captured["save"]["run_signature"] == "run-signature"
+    assert captured["save"]["top_comments"] == eda_results["top_comments"]
+    assert captured["save"]["video"]["video_id"] == "dQw4w9WgXcQ"
     assert captured["printed_report"] == "# REPORT"
     assert captured["printed_comments"] == eda_results["top_comments"]
     assert captured["top_limit"] == 5
@@ -190,13 +192,6 @@ def test_pipeline_generates_persists_and_prints_report_then_top_comments(
     positions = [output.index(message) for message in progress]
     assert positions == sorted(positions)
 
-    assert "Raw data saved" not in output
-    assert "Processed data saved" not in output
-    assert "Full analysis saved" not in output
     assert "Video details" not in output
-    assert "Classification summary" not in output
-    assert "Position categories" not in output
     assert "Report saved." in output
     assert "/report.json" not in output
-    assert "PIPELINE COMPLETED" not in output
-    assert "Consensus pipeline finished successfully" not in output

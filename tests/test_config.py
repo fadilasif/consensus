@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from consensus import config
 
 
@@ -22,4 +24,4 @@ def test_environment_loads_without_overriding_real_env(tmp_path, monkeypatch):
 
     config.load_environment()
 
-    assert config.get_optional_env("CONSENSUS_TEST_VALUE") == "from-environment"
+    assert os.getenv("CONSENSUS_TEST_VALUE") == "from-environment"

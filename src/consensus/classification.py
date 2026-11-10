@@ -231,6 +231,35 @@ def build_run_signature(
 
 
 
+def build_framework_signature(
+    *,
+    video_id: str,
+    video_title: str,
+    user_question: str,
+    comments: list[dict],
+) -> str:
+    """Signature for framework-generation inputs, model and prompt."""
+
+    return make_signature({
+        "video_id": video_id,
+        "video_title": video_title,
+        "user_question": user_question,
+        "comments": [
+            {
+                "comment_index": item["comment_index"],
+                "text": item["text"],
+            }
+            for item in comments
+        ],
+        "model": GROQ_MODEL,
+        "reasoning": GROQ_REASONING,
+        "prompt": FRAMEWORK_SYSTEM_PROMPT,
+        "schema": FRAMEWORK_SCHEMA,
+        "sample_size": FRAMEWORK_SAMPLE_SIZE,
+        "sample_chars": FRAMEWORK_SAMPLE_CHARS,
+    })
+
+
 def choose_batch_size(pending_count: int) -> int:
     """Choose a conservative batch size based on pending comments."""
 
@@ -525,9 +554,14 @@ def generate_framework(
             + safe_exception_message(error)
         ) from None
 
-    content = response.choices[0].message.content
+    try:
+        content = response.choices[0].message.content
+    except (AttributeError, IndexError, TypeError):
+        raise APIError(
+            "Groq returned an invalid framework response."
+        ) from None
 
-    if not content:
+    if not isinstance(content, str) or not content.strip():
         raise APIError("Groq returned an empty framework.")
 
     try:
@@ -535,7 +569,13 @@ def generate_framework(
     except json.JSONDecodeError:
         raise APIError("Groq returned malformed framework JSON.") from None
 
-    return normalise_framework(parsed)
+    try:
+        return normalise_framework(parsed)
+    except ValueError as error:
+        raise APIError(
+            "Groq returned an invalid framework: "
+            + safe_exception_message(error)
+        ) from None
 
 
 def normalise_framework(framework: dict) -> dict:
@@ -1044,6 +1084,56 @@ def classify_chunk(
 # 10. CHECKPOINTING
 # ============================================================
 
+def _is_valid_result(value: Any) -> bool:
+    """Return True when a stored classification record is usable."""
+
+    if not isinstance(value, dict):
+        return False
+
+    if not isinstance(value.get("comment_index"), int):
+        return False
+
+    if not isinstance(value.get("comment"), str):
+        return False
+
+    for field in ("classification", "source"):
+        if not isinstance(value.get(field), str):
+            return False
+
+    if not isinstance(value.get("soft"), dict):
+        return False
+
+    if not isinstance(value.get("needs_review"), bool):
+        return False
+
+    top_probability = value.get("stance_top_probability")
+
+    return top_probability is None or (
+        isinstance(top_probability, (int, float))
+        and not isinstance(top_probability, bool)
+    )
+
+
+def _is_valid_metric(value: Any) -> bool:
+    """Return True when a stored request-metrics record is usable."""
+
+    if not isinstance(value, dict):
+        return False
+
+    if not isinstance(value.get("chunk"), int):
+        return False
+
+    for field in ("input_tokens", "output_tokens"):
+        number = value.get(field)
+
+        if isinstance(number, bool) or not isinstance(
+            number, (int, float)
+        ):
+            return False
+
+    return True
+
+
 def load_results_file(results_path: Path) -> dict[int, dict]:
     """Load a final results JSON file into an index-keyed mapping."""
 
@@ -1056,14 +1146,21 @@ def load_results_file(results_path: Path) -> dict[int, dict]:
         raise DataError("Classification results must be a JSON list.")
 
     results_by_index = {}
+    skipped = 0
 
     for result in data:
-        if not isinstance(result, dict):
+        if not _is_valid_result(result):
+            skipped += 1
             continue
 
-        index = result.get("comment_index")
-        if isinstance(index, int):
-            results_by_index[index] = result
+        results_by_index[result["comment_index"]] = result
+
+    if skipped:
+        logger.warning(
+            "Skipped %s invalid result records in %s.",
+            skipped,
+            results_path.name,
+        )
 
     return results_by_index
 
@@ -1135,17 +1232,15 @@ def load_journal(journal_path: Path) -> tuple[dict[int, dict], dict[int, dict]]:
 
             if kind == "result":
                 result = entry.get("result")
-                if isinstance(result, dict):
-                    index = result.get("comment_index")
-                    if isinstance(index, int):
-                        results_by_index[index] = result
+
+                if _is_valid_result(result):
+                    results_by_index[result["comment_index"]] = result
 
             elif kind == "metrics":
                 metrics = entry.get("metrics")
-                if isinstance(metrics, dict):
-                    chunk = metrics.get("chunk")
-                    if isinstance(chunk, int):
-                        metrics_by_chunk[chunk] = metrics
+
+                if _is_valid_metric(metrics):
+                    metrics_by_chunk[metrics["chunk"]] = metrics
 
     return results_by_index, metrics_by_chunk
 
@@ -1513,24 +1608,38 @@ def _run_classification_locked(
     # --------------------------------------------------------
 
     framework = None
-    framework_reused = False
+    framework_signature = build_framework_signature(
+        video_id=video_id,
+        video_title=video_title,
+        user_question=user_question,
+        comments=comments,
+    )
 
     if RESUME and framework_path.exists():
 
-        saved_framework = load_json(framework_path)
+        try:
+            saved_framework = load_json(framework_path)
+        except DataError:
+            logger.warning("Ignoring unreadable framework artifact.")
+            saved_framework = None
 
         if (
             isinstance(saved_framework, dict)
             and saved_framework.get("video_id") == video_id
             and saved_framework.get("user_question") == user_question
+            # Legacy artifacts predate the signature and are still trusted.
+            and saved_framework.get("generation_signature")
+            in (None, framework_signature)
         ):
-            framework = saved_framework.get("framework")
+            candidate = saved_framework.get("framework")
 
-            if isinstance(framework, dict):
-                framework_reused = True
-                logger.info("Reusing saved classification framework.")
-            else:
-                framework = None
+            if isinstance(candidate, dict):
+                try:
+                    framework = normalise_framework(candidate)
+                    logger.info("Reusing saved classification framework.")
+                except ValueError:
+                    logger.warning("Ignoring invalid framework artifact.")
+                    framework = None
 
     if framework is None:
 
@@ -1565,9 +1674,12 @@ def _run_classification_locked(
 
     # Keep each signature's journal separate so a changed run can never
     # resume from an older journal.
-    journal_path = results_path.with_name(
-        f"{results_path.stem}_{run_signature[:12]}.jsonl"
-    )
+    artifact_paths["journal"] = paths.classification_artifact_paths(
+        video_id,
+        user_question,
+        run_signature=run_signature,
+    )["journal"]
+    journal_path = artifact_paths["journal"]
 
     metadata = {
         "run_signature": run_signature,
@@ -1601,7 +1713,11 @@ def _run_classification_locked(
 
     if RESUME and metadata_path.exists():
 
-        saved_metadata = load_json(metadata_path)
+        try:
+            saved_metadata = load_json(metadata_path)
+        except DataError:
+            logger.warning("Ignoring unreadable run metadata.")
+            saved_metadata = None
 
         if (
             isinstance(saved_metadata, dict)
@@ -1609,7 +1725,20 @@ def _run_classification_locked(
         ):
             resume_match = True
 
-            results_by_index = load_results_file(results_path)
+            # Only a completed run owns the final results file.  After an
+            # interrupted run with a new signature, the file can still hold
+            # the previous signature's results, so never reuse it then.
+            completed = saved_metadata.get("completed") is True
+
+            if completed:
+                try:
+                    results_by_index = load_results_file(results_path)
+                except DataError:
+                    logger.warning(
+                        "Ignoring unreadable results file; "
+                        "falling back to the checkpoint journal."
+                    )
+
             journal_results, journal_metrics = load_journal(journal_path)
             results_by_index.update(journal_results)
 
@@ -1617,16 +1746,13 @@ def _run_classification_locked(
 
             if isinstance(saved_metadata.get("request_metrics"), list):
                 for metric in saved_metadata["request_metrics"]:
-                    if (
-                        isinstance(metric, dict)
-                        and isinstance(metric.get("chunk"), int)
-                    ):
+                    if _is_valid_metric(metric):
                         metadata_metrics[metric["chunk"]] = metric
 
             metadata_metrics.update(journal_metrics)
             metrics_by_chunk = metadata_metrics
 
-            if not metrics_by_chunk:
+            if not metrics_by_chunk and completed:
                 prior_totals = _load_prior_totals(
                     aggregation_path,
                     saved_metadata,
@@ -1663,6 +1789,7 @@ def _run_classification_locked(
         {
             "video_id": video_id,
             "user_question": user_question,
+            "generation_signature": framework_signature,
             "framework": framework,
         },
     )
@@ -1716,18 +1843,20 @@ def _run_classification_locked(
     if rule_results:
         append_journal(journal_path, rule_results)
 
-    batch_size = choose_batch_size(len(pending))
+    # Reuse the batch size stored for this run so a resumed run chunks the
+    # remaining comments exactly as the original run did.
+    configured_batch_size = metadata.get("configured_batch_size")
+    if not configured_batch_size:
+        configured_batch_size = choose_batch_size(len(pending))
+        metadata["configured_batch_size"] = configured_batch_size
+        save_json_atomic(metadata_path, metadata)
+
+    batch_size = configured_batch_size
 
     chunks = create_chunks(
         pending,
         batch_size,
     )
-
-    configured_batch_size = metadata.get("configured_batch_size")
-    if not configured_batch_size:
-        configured_batch_size = batch_size
-        metadata["configured_batch_size"] = configured_batch_size
-        save_json_atomic(metadata_path, metadata)
 
     logger.info("Pending comments: %s", len(pending))
     logger.info("Batch size: %s", batch_size)
@@ -1740,6 +1869,10 @@ def _run_classification_locked(
     # --------------------------------------------------------
 
     failures: list[tuple[int, str]] = []
+
+    # Continue numbering after any checkpointed batch so resumed metrics keep
+    # their identity instead of overwriting the interrupted run's totals.
+    first_chunk_number = max(metrics_by_chunk, default=0) + 1
 
     if chunks:
 
@@ -1759,7 +1892,10 @@ def _run_classification_locked(
                     stance_criteria,
                 ): number
 
-                for number, chunk in enumerate(chunks, start=1)
+                for number, chunk in enumerate(
+                    chunks,
+                    start=first_chunk_number,
+                )
             }
 
             for completed, future in enumerate(

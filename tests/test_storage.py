@@ -5,7 +5,7 @@ import json
 import pytest
 
 from consensus import storage
-from consensus.errors import DataNotFoundError
+from consensus.errors import DataError, DataNotFoundError
 
 
 @pytest.fixture
@@ -30,13 +30,21 @@ def test_read_json_missing_file_raises(tmp_path):
         storage.read_json(tmp_path / "missing.json")
 
 
-def test_save_and_load_data_roundtrip(data_dir):
+def test_read_json_rejects_invalid_utf8(tmp_path):
+    path = tmp_path / "corrupt.json"
+    path.write_bytes(b"\xff\xfe")
+
+    with pytest.raises(DataError):
+        storage.read_json(path)
+
+
+def test_save_data_roundtrip(data_dir):
     payload = {"video": {"title": "Example"}, "comments": []}
 
     saved = storage.save_data("dQw4w9WgXcQ", payload)
 
     assert saved == data_dir / "raw" / "dQw4w9WgXcQ.json"
-    assert storage.load_data("dQw4w9WgXcQ") == payload
+    assert json.loads(saved.read_text(encoding="utf-8")) == payload
 
 
 def test_save_data_rejects_invalid_video_id(data_dir):

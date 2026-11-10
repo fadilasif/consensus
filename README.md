@@ -59,8 +59,9 @@ flowchart LR
    `shorts`, `embed`, `live` and `youtu.be` links are accepted. The ID is
    validated before it is used in any API call or file path.
 2. 📥 **Collect.** Video title, description, basic analytics and available
-   engagement metrics, top-level comments and replies are fetched from the
-   YouTube Data API v3, with bounded retries.
+   engagement metrics, top-level comments and the replies embedded in each
+   comment thread are fetched from the YouTube Data API v3, with bounded
+   retries.
 3. 💾 **Save raw data.** API responses are written as raw JSON before any
    processing, keeping the original data separate from the cleaned dataset.
 4. 🧹 **Clean.** Raw data becomes processed data: normalized text, HTML markup
@@ -69,8 +70,8 @@ flowchart LR
 5. 📈 **Analyse.** Python computes engagement and comment statistics over the
    processed data, including comment and reply activity. They are stored
    separately and later give the report statistical context.
-6. 🧠 **Frame.** Groq reads your question, the video title and the video
-   description, and generates a classification framework: categories,
+6. 🧠 **Frame.** Groq reads your question, the video title and a sample of
+   top-level comments, and generates a classification framework: categories,
    definitions and instructions. Different questions about the same video
    yield different frameworks.
 7. 🏷️ **Classify.** SubQ Snap assigns each top-level comment to a category
@@ -88,9 +89,10 @@ flowchart LR
     engagement statistics and top comments, and acknowledges uncertainty and
     dataset limits. It is saved as the fifth artifact.
 
-> 💡 **Population:** only **top-level comments** are classified. Replies are
-> collected, counted and reported, but never sent to the classifier. This keeps
-> the methodology consistent across runs.
+> 💡 **Population:** only **top-level comments** are classified. Replies
+> embedded in each comment thread are counted and reported, but never sent to
+> the classifier; full reply traversal is not performed. This keeps the
+> methodology consistent across runs.
 
 The **structured outputs** (per-comment classifications and aggregation) are
 the systematic record of how the audience sorted against the framework. The
@@ -100,12 +102,13 @@ the systematic record of how the audience sorted against the framework. The
 
 | Stage | Provider | Input |
 | --- | --- | --- |
-| Framework | Groq | Research question, video title, video description |
-| Classification | SubQ Snap | Processed top-level comments, framework categories, classification instructions |
+| Framework | Groq | Research question, video title, up to 40 sampled top-level comments |
+| Classification | SubQ Snap | Processed top-level comments, research question, video title, framework categories and instructions, EDA statistics |
 | Report | Groq | Research question, video information, framework, aggregated results, EDA statistics, ten most-liked top-level comments with like counts |
 
-No other raw comment text is sent to Groq. The rest of the audience is
-represented through classification results and aggregated statistics.
+Apart from that sample and the ten most-liked comments, no raw comment text is
+sent to Groq. The rest of the audience is represented through classification
+results and aggregated statistics.
 
 ### Dynamic batching
 
@@ -119,16 +122,13 @@ token efficiency: small sets avoid batching overhead, large sets cut round-trips
 | 101+ | 8 | 8 | 16 | N / 8 |
 
 *N is the number of pending comments.* Each comment is classified with **two
-questions**, because the framework uses a two-step classification (stance, then
-confidence/category).
+questions**, one for relevance and one for stance/category.
 
 - **Checkpointing:** after each successful batch a checkpoint is written to the
   journal (`.jsonl`), so a failure only loses the batch in flight.
 - **Resume:** on re-run, completed batches are skipped, and
   `configured_batch_size` is stored in the run metadata and reused for
   consistency.
-- **Debugging:** `BATCH_MODE="single"` (or its environment override) forces a
-  batch size of 1.
 
 ---
 
@@ -266,9 +266,9 @@ For a video `VIDEOID` and question key `KEY`, Consensus writes to
 | `VIDEOID_KEY_framework.json` | The Groq-generated classification framework |
 | `VIDEOID_KEY_run_metadata.json` | Run signature, model settings, `configured_batch_size`, token and request metrics |
 | `VIDEOID_KEY_report.json` | Groq audience report, research question, model and classification run signature |
-| `VIDEOID_KEY_<signature>.jsonl` | Append-only checkpoint journal |
+| `VIDEOID_KEY_<signature>.jsonl` | Append-only checkpoint journal (`<signature>` is the first 12 characters of the run signature) |
 
-The first four are written when classification completes. The report is the
+The first four are produced by the classification stage. The report is the
 fifth artifact, generated afterwards. The journal is working state used for
 [resuming](#resuming-interrupted-runs).
 
@@ -291,7 +291,7 @@ data/
 ├── raw/              original YouTube API responses, preserved before cleaning
 ├── processed/        cleaned comment records
 ├── analysis/         Python EDA and engagement statistics
-└── classifications/  results, aggregation, framework, metadata, report, checkpoints
+└── classifications/  results, aggregation, framework, metadata, report, checkpoints, archive
 ```
 
 ---
@@ -321,8 +321,8 @@ signature:
    they aren't classified (or paid for) again, and the stored
    `configured_batch_size` is reused for consistency.
 4. 🗄️ If any input above **changes** for the same question, the previous
-   artifacts are archived (hash-verified copy) before the new run writes its
-   files.
+   artifacts are archived (hash-verified copy) under
+   `data/classifications/archive/` before the new run writes its files.
 
 ---
 
@@ -337,8 +337,8 @@ signature:
 - 🖥️ Terminal control characters are stripped from untrusted comment text.
 - 🧱 Comment text is passed to models as quoted, untrusted data, with explicit
   instructions not to follow instructions found inside comments.
-- 📝 Only the ten most-liked top-level comments are sent to Groq as raw text
-  for the report.
+- 📝 The report receives only the ten most-liked top-level comments as raw
+  text; framework generation receives a small sample of comments.
 
 > ⚠️ These measures reduce prompt-injection risk but can't eliminate it.
 

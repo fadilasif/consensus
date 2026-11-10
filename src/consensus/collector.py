@@ -129,10 +129,15 @@ def get_comments(video_id):
             data = _get_json(url, params, "fetching comments")
 
             if progress is None:
-                total = data.get("pageInfo", {}).get("totalResults")
+                page_info = data.get("pageInfo")
+                total = (
+                    page_info.get("totalResults")
+                    if isinstance(page_info, dict)
+                    else None
+                )
 
                 progress = tqdm(
-                    total=total,
+                    total=_to_int(total, 0) or None,
                     desc="Fetching comments",
                     unit="comments",
                 )

@@ -4,7 +4,7 @@ const STAGES = [
   {
     key: "collecting",
     title: "Collecting comments",
-    description: "Pulling the video metadata, top-level comments, and replies.",
+    description: "Pulling the video metadata, top-level comments, and their embedded replies.",
     status: "Collecting top-level comments…",
   },
   {
@@ -238,7 +238,7 @@ function homeTemplate() {
                 ${ICONS.arrowRight}
               </button>
 
-              <p class="form-note">Top-level comments only. Replies are counted, not classified.</p>
+              <p class="form-note">Top-level comments only. Replies are never classified.</p>
               <p class="form-error" id="form-error" role="alert" hidden></p>
               ${state.notice ? `<p class="notice" role="status">${escapeHtml(state.notice)}</p>` : ""}
             </form>
@@ -313,7 +313,7 @@ function progressTemplate() {
           </ol>
         </div>
 
-        <p class="progress-note" id="progress-note" role="status" aria-live="polite">${STAGES[stageIndex].status}</p>
+        <p class="progress-note" id="progress-note" role="status" aria-live="polite">${STAGES[stageIndex]?.status || "Working…"}</p>
         <p class="progress-help">This can take a few minutes. Keep this tab open.</p>
       </div>
     </main>

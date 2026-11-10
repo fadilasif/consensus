@@ -257,6 +257,40 @@ def test_save_report_writes_question_specific_fifth_artifact(tmp_path, monkeypat
     assert not list(report_path.parent.glob(".*.tmp"))
 
 
+def test_save_report_snapshots_video_and_top_comments(tmp_path, monkeypatch):
+    monkeypatch.setenv("CONSENSUS_DATA_DIR", str(tmp_path))
+
+    report_path = reporter.save_report(
+        "dQw4w9WgXcQ",
+        "Question?",
+        "Report",
+        "signature",
+        top_comments=[
+            {"comment": "Useful", "likes": 4},
+            {"comment": "   ", "likes": 99},
+            {"comment": "Second", "likes": "7"},
+        ],
+        video={
+            "video_id": "dQw4w9WgXcQ",
+            "title": "Title",
+            "views": 10,
+            "ignored": True,
+        },
+    )
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert payload["top_comments"] == [
+        {"comment": "Useful", "likes": 4},
+        {"comment": "Second", "likes": 7},
+    ]
+    assert payload["video"] == {
+        "video_id": "dQw4w9WgXcQ",
+        "title": "Title",
+        "views": 10,
+    }
+
+
 def test_save_report_never_overwrites_another_question(tmp_path, monkeypatch):
     monkeypatch.setenv("CONSENSUS_DATA_DIR", str(tmp_path))
 

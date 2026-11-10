@@ -9,7 +9,7 @@
  */
 
 import { createReadStream, existsSync } from "node:fs";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const PUBLIC_DIR = path.join(HERE, "public");
+const PUBLIC_REAL_DIR = await realpath(PUBLIC_DIR);
 const DATA_DIR = process.env.CONSENSUS_DATA_DIR
   ? path.resolve(process.env.CONSENSUS_DATA_DIR)
   : path.join(ROOT, "data");
@@ -65,9 +66,19 @@ function log(...parts) {
   console.log(`[${stamp}]`, ...parts);
 }
 
+function normaliseQuestion(value) {
+  return String(value ?? "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, "")
+    .replace(/[\r\n]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function questionKey(question) {
-  const normalised = String(question || "").trim().replace(/\s+/g, " ");
-  return createHash("sha256").update(normalised, "utf8").digest("hex").slice(0, 16);
+  return createHash("sha256")
+    .update(normaliseQuestion(question), "utf8")
+    .digest("hex")
+    .slice(0, 16);
 }
 
 function normaliseUrlInput(input) {
@@ -181,9 +192,10 @@ function buildDistribution(aggregation) {
     }));
 }
 
-function buildTopComments(analysis, processed) {
-  const source =
-    Array.isArray(analysis?.comments?.top_comments) && analysis.comments.top_comments.length
+function buildTopComments(analysis, processed, snapshot) {
+  const source = Array.isArray(snapshot)
+    ? snapshot
+    : Array.isArray(analysis?.comments?.top_comments) && analysis.comments.top_comments.length
       ? analysis.comments.top_comments
       : Array.isArray(processed?.comments)
         ? processed.comments
@@ -200,21 +212,34 @@ function buildTopComments(analysis, processed) {
     .slice(0, 10);
 }
 
-function videoMetrics(analysis, processed) {
+function videoMetrics(analysis, processed, aggregation, snapshot) {
   const analysisVideo = analysis?.video || {};
   const processedVideo = processed?.video || {};
+  const snapshotVideo = snapshot && typeof snapshot === "object" ? snapshot : {};
 
   return {
     title:
-      String(analysisVideo.title || processedVideo.title || "").trim() ||
-      "Untitled YouTube video",
-    views: numberOrNull(analysisVideo.views ?? processedVideo.views),
-    likes: numberOrNull(analysisVideo.video_likes ?? processedVideo.likes),
+      String(
+        snapshotVideo.title ||
+          analysisVideo.title ||
+          processedVideo.title ||
+          "",
+      ).trim() || "Untitled YouTube video",
+    views: numberOrNull(
+      snapshotVideo.views ?? analysisVideo.views ?? processedVideo.views,
+    ),
+    likes: numberOrNull(
+      snapshotVideo.likes ?? analysisVideo.video_likes ?? processedVideo.likes,
+    ),
     comments:
+      numberOrNull(snapshotVideo.comments) ??
+      numberOrNull(aggregation?.total_top_level_comments) ??
       numberOrNull(analysisVideo.total_comments) ??
       numberOrNull(analysis?.comments?.total_comments) ??
       (Array.isArray(processed?.comments) ? processed.comments.length : null),
     replies:
+      numberOrNull(snapshotVideo.replies) ??
+      numberOrNull(aggregation?.total_replies_in_video) ??
       numberOrNull(analysisVideo.total_replies) ??
       numberOrNull(analysis?.replies?.total_replies),
   };
@@ -230,6 +255,22 @@ async function loadBrief(videoId, key) {
   const report = await readJson(path.join(classifications, `${prefix}_report.json`));
 
   if (!report || typeof report !== "object" || typeof report.report !== "string") {
+    return null;
+  }
+
+  const metadata = await readJson(
+    path.join(classifications, `${prefix}_run_metadata.json`),
+  );
+  const reportSignature = String(report.run_signature || "");
+  const metadataSignature =
+    metadata && typeof metadata === "object"
+      ? String(metadata.run_signature || "")
+      : "";
+
+  // Show a report only when it belongs to the current classification.
+  // Otherwise an older narrative could be paired with newer aggregation and
+  // comments.
+  if (!reportSignature || reportSignature !== metadataSignature) {
     return null;
   }
 
@@ -254,7 +295,13 @@ async function loadBrief(videoId, key) {
   const relevant =
     numberOrNull(aggregation?.relevant_comments) ?? Math.max(0, classified - irrelevant);
 
-  const video = videoMetrics(analysis, processed);
+  const snapshotVideo =
+    report.video && typeof report.video === "object" ? report.video : {};
+  const snapshotComments = Array.isArray(report.top_comments)
+    ? report.top_comments
+    : null;
+
+  const video = videoMetrics(analysis, processed, aggregation, snapshotVideo);
 
   return {
     videoId,
@@ -279,63 +326,13 @@ async function loadBrief(videoId, key) {
       relevantPercentage: classified ? (relevant / classified) * 100 : 0,
       irrelevantPercentage: classified ? (irrelevant / classified) * 100 : 0,
     },
-    topComments: buildTopComments(analysis, processed),
+    topComments: buildTopComments(analysis, processed, snapshotComments),
     scope: {
       classificationPopulation: String(aggregation?.classification_population || ""),
       totalTopLevelComments: numberOrNull(aggregation?.total_top_level_comments),
       totalReplies: numberOrNull(aggregation?.total_replies_in_video),
     },
   };
-}
-
-async function listBriefs() {
-  const classifications = path.join(DATA_DIR, "classifications");
-  let entries = [];
-
-  try {
-    entries = await readdir(classifications, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
-  const briefs = [];
-
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith("_report.json")) continue;
-
-    const prefix = entry.name.slice(0, -"_report.json".length);
-    const match = prefix.match(/^([A-Za-z0-9_-]{11})_([a-f0-9]{16})$/);
-    if (!match) continue;
-
-    const report = await readJson(path.join(classifications, entry.name));
-    if (!report || typeof report.report !== "string" || !report.report.trim()) continue;
-
-    const [, videoId, key] = match;
-    const aggregation = await readJson(
-      path.join(classifications, `${prefix}_aggregation.json`),
-    );
-    const analysis = await readJson(path.join(DATA_DIR, "analysis", `${videoId}.json`));
-    const question = String(
-      report.user_question || report.research_question || "",
-    ).trim();
-
-    briefs.push({
-      videoId,
-      questionKey: key,
-      title:
-        String(aggregation?.video_title || analysis?.video?.title || "").trim() ||
-        `YouTube ${videoId}`,
-      question,
-      generatedAt: String(report.generated_at || ""),
-      model: String(report.model || ""),
-    });
-  }
-
-  briefs.sort(
-    (a, b) => (Date.parse(b.generatedAt) || 0) - (Date.parse(a.generatedAt) || 0),
-  );
-
-  return briefs.slice(0, 12);
 }
 
 function jsonResponse(res, status, payload) {
@@ -447,7 +444,7 @@ async function handleAnalyze(req, res) {
   }
 
   const parsed = normaliseUrlInput(body?.url);
-  const question = String(body?.question || "").trim();
+  const question = normaliseQuestion(body?.question);
 
   res.writeHead(200, {
     ...SECURITY_HEADERS,
@@ -482,9 +479,7 @@ async function handleAnalyze(req, res) {
     }
     res.end();
 
-    if (child && child.exitCode === null && !child.killed) {
-      child.kill("SIGTERM");
-    }
+    terminateChild(child);
   };
 
   const stage = (name) => {
@@ -504,7 +499,7 @@ async function handleAnalyze(req, res) {
     metaSent = true;
     send({
       type: "meta",
-      video: videoMetrics(analysis, processed),
+      video: videoMetrics(analysis, processed, null, null),
     });
   };
 
@@ -551,9 +546,7 @@ async function handleAnalyze(req, res) {
     if (heartbeat) clearInterval(heartbeat);
     if (timeout) clearTimeout(timeout);
 
-    if (child && child.exitCode === null && !child.killed) {
-      child.kill("SIGTERM");
-    }
+    terminateChild(child);
   });
 
   if (!parsed) {
@@ -691,6 +684,17 @@ async function handleAnalyze(req, res) {
   child.stdin.end();
 }
 
+function terminateChild(child) {
+  if (!child || child.exitCode !== null) return;
+
+  child.kill("SIGTERM");
+
+  const killTimer = setTimeout(() => {
+    if (child.exitCode === null) child.kill("SIGKILL");
+  }, 5000);
+  killTimer.unref?.();
+}
+
 async function serveStatic(req, res, pathname) {
   let decoded;
 
@@ -709,10 +713,27 @@ async function serveStatic(req, res, pathname) {
     return;
   }
 
+  let realFilePath;
+
+  try {
+    realFilePath = await realpath(filePath);
+  } catch {
+    textResponse(res, 404, "Not found.");
+    return;
+  }
+
+  if (
+    realFilePath !== PUBLIC_REAL_DIR &&
+    !realFilePath.startsWith(`${PUBLIC_REAL_DIR}${path.sep}`)
+  ) {
+    textResponse(res, 403, "Forbidden.");
+    return;
+  }
+
   let fileStat;
 
   try {
-    fileStat = await stat(filePath);
+    fileStat = await stat(realFilePath);
   } catch {
     textResponse(res, 404, "Not found.");
     return;
@@ -723,7 +744,7 @@ async function serveStatic(req, res, pathname) {
     return;
   }
 
-  const extension = path.extname(filePath).toLowerCase();
+  const extension = path.extname(realFilePath).toLowerCase();
   const contentType = MIME_TYPES[extension] || "application/octet-stream";
 
   res.writeHead(200, {
@@ -738,7 +759,7 @@ async function serveStatic(req, res, pathname) {
     return;
   }
 
-  createReadStream(filePath).pipe(res);
+  createReadStream(realFilePath).pipe(res);
 }
 
 const server = createServer(async (req, res) => {
@@ -762,11 +783,6 @@ const server = createServer(async (req, res) => {
         dataDir: DATA_DIR,
         python: PYTHON,
       });
-    }
-
-    if (pathname === "/api/briefs") {
-      if (method !== "GET") return jsonResponse(res, 405, { error: "Method not allowed." });
-      return jsonResponse(res, 200, { briefs: await listBriefs() });
     }
 
     if (pathname.startsWith("/api/briefs/")) {

@@ -10,15 +10,10 @@ Default behaviour:
 from __future__ import annotations
 
 import hashlib
-import json
 import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
-from typing import Any
 
-from .errors import DataError
 from .validation import validate_video_id
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -117,13 +112,27 @@ def question_key(user_question: str) -> str:
     return hashlib.sha256(normalised.encode("utf-8")).hexdigest()[:16]
 
 
-def classification_artifact_paths(video_id: str, user_question: str) -> dict[str, Path]:
-    """Return the preserved artifacts plus internal checkpoint paths."""
+def classification_artifact_paths(
+    video_id: str,
+    user_question: str,
+    run_signature: str | None = None,
+) -> dict[str, Path]:
+    """Return the preserved artifacts plus internal checkpoint paths.
+
+    The checkpoint journal is keyed by the first 12 characters of the run
+    signature so a changed run can never resume from an older journal.  The
+    legacy unsuffixed name is kept when no signature is supplied.
+    """
 
     video_id = validate_video_id(video_id)
     base = get_classifications_dir()
     key = question_key(user_question)
     prefix = f"{video_id}_{key}"
+    journal = (
+        base / f"{prefix}_{run_signature[:12]}.jsonl"
+        if run_signature
+        else base / f"{prefix}.jsonl"
+    )
 
     return {
         "base": base,
@@ -133,50 +142,6 @@ def classification_artifact_paths(video_id: str, user_question: str) -> dict[str
         "framework": base / f"{prefix}_framework.json",
         "metadata": base / f"{prefix}_run_metadata.json",
         "report": base / f"{prefix}_report.json",
-        "journal": base / f"{prefix}.jsonl",
+        "journal": journal,
         "lock": base / f".{prefix}.lock",
     }
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-
-    return digest.hexdigest()
-
-
-def _validate_json_file(path: Path) -> None:
-    try:
-        with path.open("r", encoding="utf-8") as file:
-            json.load(file)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise DataError(f"Unreadable JSON file: {path.name}") from exc
-
-
-def _atomic_copy(source: Path, target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    file_descriptor, temporary_name = tempfile.mkstemp(
-        dir=target.parent,
-        prefix=f".{target.name}.",
-        suffix=".tmp",
-    )
-    os.close(file_descriptor)
-    temporary_path = Path(temporary_name)
-
-    try:
-        shutil.copy2(source, temporary_path)
-
-        with temporary_path.open("rb+") as file:
-            os.fsync(file.fileno())
-
-        if _sha256(source) != _sha256(temporary_path):
-            raise DataError(f"Verification failed while copying {source.name}.")
-
-        os.replace(temporary_path, target)
-    finally:
-        if temporary_path.exists():
-            temporary_path.unlink()

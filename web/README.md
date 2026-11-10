@@ -7,7 +7,7 @@ analysis logic.
 The page is served by a small Node bridge (`web/server.mjs`) that:
 
 - serves the static frontend from `web/public/`
-- reads existing brief artifacts from `data/` for the recent-briefs list
+- reads existing brief artifacts from `data/` for deep links
 - invokes the unchanged CLI (`python -m consensus.main`) for new analyses
 - streams pipeline progress back to the page as NDJSON
 
@@ -42,7 +42,6 @@ CLI still needs the usual API keys in `.env` before an analysis can run.
 | Route | Description |
 | --- | --- |
 | `GET /api/health` | Liveness plus the resolved data directory and Python path. |
-| `GET /api/briefs` | Recent saved briefs, newest first. |
 | `GET /api/briefs/:videoId/:questionKey` | One saved brief with metrics, distribution, narrative, and top comments. |
 | `POST /api/analyze` | Runs the CLI and streams `started`, `stage`, `meta`, `done`, and `error` events. |
 

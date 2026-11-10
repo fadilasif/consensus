@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from consensus import classification
-from consensus.errors import ClassificationResponseError
+from consensus.errors import APIError, ClassificationResponseError
 
 
 def make_framework() -> dict:
@@ -202,6 +203,32 @@ def test_normalise_framework_rejects_reserved_category():
 
     with pytest.raises(ValueError):
         classification.normalise_framework(framework)
+
+
+def test_generate_framework_wraps_invalid_structure(monkeypatch):
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kwargs: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content='{"categories": []}',
+                            ),
+                        )
+                    ],
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(classification, "_get_groq_client", lambda: client)
+
+    with pytest.raises(APIError):
+        classification.generate_framework(
+            user_question="Question?",
+            video_title="Title",
+            comments=[{"comment_index": 0, "text": "A comment"}],
+        )
 
 
 def test_build_payload_quotes_comment_as_untrusted_data():

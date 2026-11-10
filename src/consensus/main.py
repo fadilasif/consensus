@@ -148,9 +148,9 @@ def _run_pipeline(video_id: str, user_question: str) -> int:
     # Prepare classification framework
     framework = {
         "question_interpretation": aggregation.get(
-            "question_interpretation", {}
+            "question_interpretation", ""
         ),
-        "categories": aggregation.get("categories", {}),
+        "categories": aggregation.get("categories", []),
     }
 
     # Generate final audience intelligence report
@@ -167,6 +167,21 @@ def _run_pipeline(video_id: str, user_question: str) -> int:
         eda=eda_results["analysis"],
     )
 
+    # Snapshot the shared per-video data used by the brief so a later run for
+    # another question cannot silently change this report's presentation.
+    analysis = eda_results["analysis"]
+    analysis_video = analysis.get("video", {}) if isinstance(analysis, dict) else {}
+
+    if not isinstance(analysis_video, dict):
+        analysis_video = {}
+
+    report_video = {
+        **details,
+        "video_id": video_id,
+        "comments": analysis_video.get("total_comments"),
+        "replies": analysis_video.get("total_replies"),
+    }
+
     # Persist the report as the fifth question-specific artifact
     save_report(
         video_id=video_id,
@@ -176,6 +191,8 @@ def _run_pipeline(video_id: str, user_question: str) -> int:
             video_id,
             user_question,
         ),
+        top_comments=eda_results["top_comments"],
+        video=report_video,
     )
 
     print("Report saved.")

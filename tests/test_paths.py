@@ -68,6 +68,22 @@ def test_artifact_paths_differ_per_question(data_dir):
     assert first["results"] != second["results"]
 
 
+def test_artifact_paths_journal_is_keyed_by_run_signature(data_dir):
+    signature = "0123456789abcdef0123456789abcdef"
+    artifacts = paths.classification_artifact_paths(
+        "dQw4w9WgXcQ",
+        "Is it useful?",
+        run_signature=signature,
+    )
+
+    key = paths.question_key("Is it useful?")
+    assert artifacts["journal"] == (
+        data_dir
+        / "classifications"
+        / f"dQw4w9WgXcQ_{key}_{signature[:12]}.jsonl"
+    )
+
+
 def test_artifact_paths_reject_invalid_video_id(data_dir):
     with pytest.raises(ValidationError):
         paths.classification_artifact_paths("../etc/passwd", "Question")

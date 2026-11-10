@@ -52,6 +52,8 @@ def read_json(path: Path) -> Any:
             return json.load(file)
     except json.JSONDecodeError as exc:
         raise DataError(f"Invalid JSON in {path.name}: {exc.msg}") from None
+    except UnicodeDecodeError:
+        raise DataError(f"Invalid UTF-8 in {path.name}.") from None
     except OSError as exc:
         raise DataError(f"Could not read {path.name}: {exc}") from None
 
@@ -61,8 +63,3 @@ def save_data(video_id, data):
     file_path = safe_video_path(paths.get_raw_dir(), video_id)
     write_json_atomic(file_path, data, indent=4)
     return file_path
-
-
-def load_data(video_id):
-    file_path = safe_video_path(paths.get_raw_dir(), video_id)
-    return read_json(file_path)

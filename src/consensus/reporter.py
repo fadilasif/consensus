@@ -314,8 +314,14 @@ def save_report(
     report: str,
     run_signature: str,
     generated_at: str | None = None,
+    top_comments: list[dict[str, Any]] | None = None,
+    video: dict[str, Any] | None = None,
 ) -> Path:
-    """Persist the report as the question-specific fifth artifact."""
+    """Persist the report as the question-specific fifth artifact.
+
+    The optional snapshots keep the web brief stable when a later run for the
+    same video replaces the shared processed and analysis artifacts.
+    """
 
     if not isinstance(report, str) or not report.strip():
         raise ValueError("Report must be a non-empty string.")
@@ -341,6 +347,45 @@ def save_report(
         "reasoning_effort": REPORT_REASONING,
         "report": report,
     }
+
+    if isinstance(top_comments, list):
+        cleaned_comments = []
+
+        for item in top_comments:
+            if not isinstance(item, dict):
+                continue
+
+            text = item.get("comment")
+
+            if not isinstance(text, str) or not text.strip():
+                continue
+
+            try:
+                likes = int(item.get("likes", 0) or 0)
+            except (TypeError, ValueError):
+                likes = 0
+
+            cleaned_comments.append({"comment": text, "likes": likes})
+
+            if len(cleaned_comments) == SUPPLEMENTARY_COMMENT_LIMIT:
+                break
+
+        payload["top_comments"] = cleaned_comments
+
+    if isinstance(video, dict):
+        payload["video"] = {
+            key: video.get(key)
+            for key in (
+                "video_id",
+                "title",
+                "description",
+                "views",
+                "likes",
+                "comments",
+                "replies",
+            )
+            if key in video
+        }
 
     write_json_atomic(artifact_paths["report"], payload, indent=2)
 
