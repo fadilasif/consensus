@@ -4,14 +4,14 @@
 
 Consensus is an AI-powered YouTube audience intelligence tool. You give it a
 video URL and a research question, for example *"Should I buy the iPhone 18 Pro
-or wait for the next model?"*, and it returns a structured, per-comment
-classification, aggregated statistics and a written audience report.
+or wait for the next model?"*, and it returns a per-comment classification,
+aggregated statistics and a written audience report.
 
 **What makes it different from a comment summarizer:** Consensus doesn't just
 condense comments. It first builds a **classification framework around your
-specific question**, then systematically classifies every top-level comment
-against it. Ask a different question about the same video and you get a
-different framework, different categories and a different result.
+specific question**, then classifies every top-level comment against it. Ask a
+different question about the same video and you get different categories and a
+different result.
 
 ---
 
@@ -34,168 +34,101 @@ different framework, different categories and a different result.
 
 ## ⚙️ How it works
 
-### Architecture
-
-Each component has a clearly separated responsibility:
+Each component has a separate responsibility:
 
 | Component | Responsibility |
 | --- | --- |
-| **YouTube Data API v3** | Data collection: video details, comments and replies |
-| **Python** (with Pandas) | Validation, cleaning, exploratory analysis, aggregation, top-comment selection and persistence |
-| **Groq** | Generating the question-specific classification framework, and writing the final audience report |
-| **SubQ** | Classifying each top-level comment against the generated framework |
+| **YouTube Data API v3** | Collects video details, comments and replies |
+| **Python** (with Pandas) | Validation, cleaning, exploratory analysis, aggregation, top-comment selection, persistence |
+| **Groq** | Generates the question-specific framework and writes the final report |
+| **SubQ Snap** | Classifies each top-level comment against the framework |
 
 ```mermaid
-flowchart TD
-    U([👤 User]) -->|"YouTube URL +<br/>research question"| V["Validate URL<br/>extract video ID"]
-
-    subgraph YTG ["📺 YouTube Data API v3"]
-        YT["Fetch video details,<br/>comments and replies<br/>(bounded retries)"]
-    end
-
-    subgraph PY1 ["🐍 Python: preparation"]
-        RAW[("Raw JSON<br/>data/raw")]
-        CLEAN["Clean with<br/>Pandas / Python"]
-        PROC[("Processed JSON<br/>data/processed")]
-        EDA["Exploratory<br/>data analysis"]
-        STATS[("EDA statistics<br/>data/analysis")]
-    end
-
-    subgraph GQ1 ["🧠 Groq"]
-        FW["Generate question-specific<br/>classification framework"]
-    end
-
-    subgraph SQ ["🏷️ SubQ"]
-        CLS["Classify top-level comments<br/>in dynamic batches"]
-    end
-
-    subgraph PY2 ["🐍 Python: results"]
-        JNL[("Checkpoint journal<br/>.jsonl")]
-        AGG["Aggregate<br/>classifications"]
-        TOP["Select 10 most-liked<br/>top-level comments"]
-        ART[("Four classification artifacts<br/>data/classifications")]
-    end
-
-    subgraph GQ2 ["📝 Groq"]
-        REP["Write audience<br/>intelligence report"]
-    end
-
-    V --> YT
-    YT -->|"API responses"| RAW
-    RAW --> CLEAN --> PROC
-    PROC --> EDA --> STATS
-    PROC -->|"question, video title,<br/>video description"| FW
-    FW -->|"categories, definitions,<br/>instructions"| CLS
-    PROC -->|"top-level comments"| CLS
-    CLS -->|"checkpoint after<br/>each batch"| JNL
-    CLS --> AGG
-    PROC --> TOP
-    AGG --> ART
-    AGG -->|"classification results"| REP
-    STATS -->|"EDA statistics"| REP
-    TOP -->|"top 10 comments + likes"| REP
-    FW -->|"framework"| REP
-    REP --> RPT[("Report artifact<br/>_report.json")]
-    ART --> OUT
-    RPT --> OUT(["📊 Results for the user"])
+flowchart LR
+    A["👤 URL +<br/>question"] --> B["📺 YouTube API<br/>collect"]
+    B --> C["🐍 Python<br/>clean + EDA"]
+    C --> D["🧠 Groq<br/>framework"]
+    D --> E["🏷️ SubQ Snap<br/>classify"]
+    E --> F["🐍 Python<br/>aggregate + top 10"]
+    F --> G["📝 Groq<br/>report"]
 ```
 
-### Pipeline walkthrough
+### Pipeline
 
-1. 🔎 **Validate input.** The URL is validated and the video ID extracted.
-   `watch`, `shorts`, `embed`, `live` and `youtu.be` links are accepted. The
-   ID is validated before it is used in any API call or file path.
-2. 📥 **Collect.** Consensus uses the YouTube Data API v3 to fetch the video's
-   title, description, basic analytics and available engagement metrics,
-   top-level comments and replies, with bounded retries.
-3. 💾 **Save raw data.** The API responses are written as raw JSON before any
-   processing, so the originally collected data always stays separate from the
-   cleaned dataset.
-4. 🧹 **Clean.** Raw data is turned into processed data: cleaned comment
-   records with normalized text, unwanted HTML markup removed and zero-width
-   Unicode characters stripped.
+1. 🔎 **Validate.** The URL is checked and the video ID extracted. `watch`,
+   `shorts`, `embed`, `live` and `youtu.be` links are accepted. The ID is
+   validated before it is used in any API call or file path.
+2. 📥 **Collect.** Video title, description, basic analytics and available
+   engagement metrics, top-level comments and replies are fetched from the
+   YouTube Data API v3, with bounded retries.
+3. 💾 **Save raw data.** API responses are written as raw JSON before any
+   processing, keeping the original data separate from the cleaned dataset.
+4. 🧹 **Clean.** Raw data becomes processed data: normalized text, HTML markup
+   removed and zero-width Unicode characters stripped.
    `YouTube API → Raw JSON → Cleaning → Processed JSON`
 5. 📈 **Analyse.** Python computes engagement and comment statistics over the
-   processed dataset (including comment and reply activity) to understand the
-   dataset's structure and provide statistical context for the final report.
-   Results are stored separately from raw and processed data.
-6. 🧠 **Frame.** Groq receives your research question, the video title and the
-   video description, and generates a classification framework tailored to
-   that question: categories, definitions and classification instructions.
-   Groq decides which categories matter for your objective, so different
-   questions about the same video produce different frameworks.
-7. 🏷️ **Classify.** SubQ receives the processed top-level comments, the
-   framework's categories and the classification instructions, and assigns
-   each comment to a category. Requests are sent in dynamically sized batches
-   (see [below](#dynamic-batching)), and a checkpoint is appended after every
-   successful batch.
-8. 📊 **Aggregate.** Python turns the individual classifications into summary
-   statistics: total comments classified, relevant versus irrelevant counts,
-   and per-category counts and percentages.
+   processed data, including comment and reply activity. They are stored
+   separately and later give the report statistical context.
+6. 🧠 **Frame.** Groq reads your question, the video title and the video
+   description, and generates a classification framework: categories,
+   definitions and instructions. Different questions about the same video
+   yield different frameworks.
+7. 🏷️ **Classify.** SubQ Snap assigns each top-level comment to a category
+   from the framework, in [adaptively sized batches](#dynamic-batching) with a
+   checkpoint after every successful batch.
+8. 📊 **Aggregate.** Python summarises the classifications: total comments
+   classified, relevant versus irrelevant counts, and per-category counts and
+   percentages.
 9. ⭐ **Select top comments.** Python independently picks the ten most-liked
-   top-level comments by like count. They're supplementary qualitative
-   evidence only, never a replacement for the full classification. Likes
-   measure engagement, not necessarily agreement or approval.
-10. 📝 **Narrate.** Groq receives the evidence package (see
-    [What each model receives](#what-each-model-receives)) and writes a
-    concise, natural-language audience intelligence report, saved as the fifth
-    artifact.
+   top-level comments. They are supplementary evidence only, not a replacement
+   for the full classification, and likes measure engagement, not necessarily
+   agreement.
+10. 📝 **Report.** Groq turns the evidence into a concise audience report that
+    answers your question, covers dominant patterns and disagreement, uses the
+    engagement statistics and top comments, and acknowledges uncertainty and
+    dataset limits. It is saved as the fifth artifact.
 
 > 💡 **Population:** only **top-level comments** are classified. Replies are
 > collected, counted and reported, but never sent to the classifier. This keeps
 > the methodology consistent across runs.
 
-### Dynamic batching
-
-To keep each request a manageable size and avoid unnecessary token
-consumption, the batch size depends on how many comments need classifying:
-
-| Number of comments | Strategy |
-| --- | --- |
-| 1–10 | No batching; classified individually |
-| 11–100 | Batches of 10 |
-| Above 100 | Batches of 20 |
-
-<!-- VERIFY against the classifier source: exact thresholds and boundary behaviour. -->
-
-Batching ties directly into reliability: each successful batch is checkpointed,
-so a failure part-way through only costs you the batch in flight. See
-[Resuming interrupted runs](#resuming-interrupted-runs).
+The **structured outputs** (per-comment classifications and aggregation) are
+the systematic record of how the audience sorted against the framework. The
+**report** is a written interpretation of that record.
 
 ### What each model receives
 
 | Stage | Provider | Input |
 | --- | --- | --- |
-| Framework generation | Groq | Research question, video title, video description |
-| Comment classification | SubQ | Processed top-level comments, framework categories, classification instructions |
-| Final report | Groq | Research question, video information, framework, aggregated classification results, EDA statistics, and the ten most-liked top-level comments with their like counts |
+| Framework | Groq | Research question, video title, video description |
+| Classification | SubQ Snap | Processed top-level comments, framework categories, classification instructions |
+| Report | Groq | Research question, video information, framework, aggregated results, EDA statistics, ten most-liked top-level comments with like counts |
 
-No other raw comment text is sent to Groq for reporting. The rest of the
-audience is represented through classification results and aggregated
-statistics.
+No other raw comment text is sent to Groq. The rest of the audience is
+represented through classification results and aggregated statistics.
 
-### What the final report does
+### Dynamic batching
 
-The report directly addresses your original question and explains the overall
-audience response. It highlights dominant patterns, discusses disagreement and
-contrasting viewpoints where present, works in relevant engagement statistics,
-uses the most-liked comments as supporting evidence, and acknowledges
-uncertainty and dataset limitations rather than drawing unsupported
-conclusions.
+Batch size adapts to the number of pending comments, balancing latency against
+token efficiency: small sets avoid batching overhead, large sets cut round-trips.
 
-### What you get
+| Pending comments | Batch size | Comments / request | Questions / request | Total API calls (≈) |
+| --- | --- | --- | --- | --- |
+| 1–9 | 1 | 1 | 2 | N |
+| 10–100 | 4 | 4 | 8 | N / 4 |
+| 101+ | 8 | 8 | 16 | N / 8 |
 
-| Output | Nature |
-| --- | --- |
-| Video information and basic analytics | Collected data |
-| Individual comment classifications | Structured |
-| Aggregated distribution, with relevant and irrelevant counts | Structured |
-| Engagement analysis and the ten most-liked comments | Statistical / evidence |
-| Audience intelligence report | Narrative, AI-written |
+*N is the number of pending comments.* Each comment is classified with **two
+questions**, because the framework uses a two-step classification (stance, then
+confidence/category).
 
-The **structured outputs** are the systematic, per-comment record of how the
-audience sorted against the framework. The **report** is an interpretation of
-that record, written for a human reader.
+- **Checkpointing:** after each successful batch a checkpoint is written to the
+  journal (`.jsonl`), so a failure only loses the batch in flight.
+- **Resume:** on re-run, completed batches are skipped, and
+  `configured_batch_size` is stored in the run metadata and reused for
+  consistency.
+- **Debugging:** `BATCH_MODE="single"` (or its environment override) forces a
+  batch size of 1.
 
 ---
 
@@ -219,7 +152,7 @@ uv sync
 uv pip install .        # or: pip install .
 ```
 
-This installs the `consensus` console script (the pipeline).
+This installs the `consensus` console script.
 
 **🔐 Add your keys**
 
@@ -236,10 +169,7 @@ GROQ_API_KEY=...
 **▶️ Run**
 
 ```bash
-consensus
-
-# from a source checkout without activating the environment
-uv run consensus
+consensus          # or, from a source checkout: uv run consensus
 ```
 
 Paste a YouTube URL, type your research question, and wait for the artifacts.
@@ -263,13 +193,13 @@ credentials. Real environment variables take precedence over values in `.env`.
 
 ⚠️ `.env` is ignored by Git. Never commit real keys.
 
-**📍 Where the `.env` file is read from**
+### 📍 Where the `.env` file is read from
 
-| How you run Consensus | Default location |
+| Situation | `.env` location |
 | --- | --- |
+| `CONSENSUS_ENV_FILE` is set | That file, always |
 | Source checkout | `<project>/.env` |
 | Installed package | Per-user config directory, e.g. `~/.config/consensus/.env` on Linux |
-| `CONSENSUS_ENV_FILE` set | That file, always |
 
 ### 🎛️ Optional overrides
 
@@ -277,7 +207,7 @@ credentials. Real environment variables take precedence over values in `.env`.
 | --- | --- |
 | `CONSENSUS_DATA_DIR` | Use a custom data directory. Highest priority. |
 | `CONSENSUS_ENV_FILE` | Load credentials from a specific `.env` file. |
-| `CONSENSUS_LOG_LEVEL` | Set the logging level, e.g. `INFO` or `DEBUG`. Defaults to `WARNING`. |
+| `CONSENSUS_LOG_LEVEL` | Logging level, e.g. `INFO` or `DEBUG`. Defaults to `WARNING`. |
 
 ---
 
@@ -299,16 +229,13 @@ You will be asked for:
    to understand. The framework is built around it.
 
 Different questions for the same video are stored separately and never
-overwrite each other, so you can ask as many as you like.
+overwrite each other.
 
-Example research questions (all user-defined; none have special built-in
-behaviour):
+Example questions (any question works, none have special behaviour):
 
 - *Should I buy this product, or wait for the next model?*
 - *Do viewers believe AI will replace software developers?*
-- *Are users satisfied with this product?*
 - *What are the biggest concerns about this technology?*
-- *Do viewers prefer one approach over the other?*
 
 ### 🖥️ Web interface
 
@@ -335,15 +262,15 @@ For a video `VIDEOID` and question key `KEY`, Consensus writes to
 | File | Contents |
 | --- | --- |
 | `VIDEOID_KEY.json` | Individual comment classification results |
-| `VIDEOID_KEY_aggregation.json` | Aggregated classification statistics (counts, percentages, relevant/irrelevant totals) |
+| `VIDEOID_KEY_aggregation.json` | Aggregated statistics: counts, percentages, relevant/irrelevant totals |
 | `VIDEOID_KEY_framework.json` | The Groq-generated classification framework |
-| `VIDEOID_KEY_run_metadata.json` | Run signature, model settings, token and request metrics |
+| `VIDEOID_KEY_run_metadata.json` | Run signature, model settings, `configured_batch_size`, token and request metrics |
 | `VIDEOID_KEY_report.json` | Groq audience report, research question, model and classification run signature |
 | `VIDEOID_KEY_<signature>.jsonl` | Append-only checkpoint journal |
 
-The first four are written once classification completes; the report is the
-fifth artifact, generated afterwards from those results. The journal is working
-state used for [resuming](#resuming-interrupted-runs).
+The first four are written when classification completes. The report is the
+fifth artifact, generated afterwards. The journal is working state used for
+[resuming](#resuming-interrupted-runs).
 
 ---
 
@@ -351,9 +278,9 @@ state used for [resuming](#resuming-interrupted-runs).
 
 ## 🗂️ Where data is stored
 
-| How you run Consensus | Data directory |
+| Situation | Data directory |
 | --- | --- |
-| `CONSENSUS_DATA_DIR` set | That directory, always |
+| `CONSENSUS_DATA_DIR` is set | That directory, always |
 | Source checkout | `<project>/data` |
 | Installed package, Linux | `~/.local/share/consensus` |
 | Installed package, macOS | `~/Library/Application Support/consensus` |
@@ -373,9 +300,6 @@ data/
 
 ## 🔄 Resuming interrupted runs
 
-Classification is the slowest and most expensive stage, so Consensus is built
-so that an interruption doesn't waste completed work.
-
 A run resumes automatically when **all** of the following match the saved run
 signature:
 
@@ -390,14 +314,15 @@ signature:
 **How it behaves:**
 
 1. 💾 A checkpoint is appended to the JSONL journal after every successful
-   classification batch.
-2. ❌ If a later batch fails, the batches already completed stay checkpointed
-   and the run exits with a clear error.
-3. 🔁 Re-run the same video and question. Completed batches are reused rather
-   than classified again, which avoids repeating classification API requests.
-4. 🗄️ If any of the inputs above **change** for the same question, the
-   previous artifacts are archived (hash-verified copy) before the new run
-   writes its files. Nothing is silently overwritten.
+   batch.
+2. ❌ If a later batch fails, completed batches stay checkpointed and the run
+   exits with a clear error.
+3. 🔁 Re-run the same video and question. Completed batches are skipped, so
+   they aren't classified (or paid for) again, and the stored
+   `configured_batch_size` is reused for consistency.
+4. 🗄️ If any input above **changes** for the same question, the previous
+   artifacts are archived (hash-verified copy) before the new run writes its
+   files.
 
 ---
 
@@ -412,12 +337,10 @@ signature:
 - 🖥️ Terminal control characters are stripped from untrusted comment text.
 - 🧱 Comment text is passed to models as quoted, untrusted data, with explicit
   instructions not to follow instructions found inside comments.
-- 📝 The final audience report receives classified results, EDA statistics, the
-  ten most-liked top-level comments (text and likes) as supplementary evidence,
-  and your question. No other raw comment text is sent to Groq for reporting.
+- 📝 Only the ten most-liked top-level comments are sent to Groq as raw text
+  for the report.
 
-> ⚠️ These measures reduce prompt-injection risk but can't eliminate it. Treat
-> model output derived from public comments as untrusted.
+> ⚠️ These measures reduce prompt-injection risk but can't eliminate it.
 
 ---
 
@@ -430,9 +353,7 @@ uv sync --group dev
 uv run pytest
 ```
 
-🧪 Tests mock all external providers and never make paid API requests, so the
-suite validates the project's behaviour without needing real keys or spending
-quota.
+🧪 Tests mock all providers and never make paid API requests.
 
 ---
 
@@ -443,11 +364,9 @@ quota.
 | Symptom | What to check |
 | --- | --- |
 | Error about a missing API key | Confirm all three keys are set in the `.env` file Consensus is reading (see [Configuration](#configuration)), or exported as environment variables. |
-| Video details or comments can't be fetched | Check `YOUTUBE_API_KEY` and that the YouTube Data API v3 is enabled for it. The API has a daily quota, which you can check in your Google Cloud console. Collection uses bounded retries, so a persistent failure ends the run with an error. |
-| Framework or report generation fails | Check `GROQ_API_KEY` and your Groq account's availability and limits, then re-run the same video and question. |
+| Video or comments can't be fetched | Check `YOUTUBE_API_KEY`, that YouTube Data API v3 is enabled for it, and your daily quota in the Google Cloud console. |
+| Framework or report generation fails | Check `GROQ_API_KEY` and your Groq limits, then re-run the same video and question. |
 | Run stops partway with a batch error | Check `SUBQ_API_KEY` and your SubQ limits, then re-run with the same video and question. Completed batches are checkpointed and the run resumes. |
-| Run starts from scratch unexpectedly | Something in the run signature changed (comment set, framework, prompts, models or settings), for example because the video received new comments. The previous artifacts were archived, not lost. |
-| Can't find your output files | Check which data directory is active (see [Where data is stored](#where-data-is-stored)). Look in `classifications/` for results, report and metadata. |
-| Wrong `.env` is being read | See [Where the `.env` file is read from](#configuration), or point to a file explicitly with `CONSENSUS_ENV_FILE`. |
-| Web interface won't start or load | Make sure Node.js is installed, you're running `node web/server.mjs`, and you're opening <http://127.0.0.1:4173>. The bridge runs the same CLI, so keys must be configured as above. See [`web/README.md`](web/README.md). |
-| Need more detail on what happened | Set `CONSENSUS_LOG_LEVEL=INFO` or `DEBUG` and re-run. |
+| Run starts from scratch unexpectedly | Something in the run signature changed (comment set, framework, prompts, models or settings). The previous artifacts were archived, not lost. |
+| Can't find your output files | Check which data directory is active (see [Where data is stored](#where-data-is-stored)). |
+| Web interface won't load | Make sure Node.js is installed, `node web/server.mjs` is running and you're on <http://127.0.0.1:4173>. The bridge runs the CLI, so keys must be configured too. See [`web/README.md`](web/README.md). |
