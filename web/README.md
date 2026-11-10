@@ -7,7 +7,8 @@ analysis logic.
 The page is served by a small Node bridge (`web/server.mjs`) that:
 
 - serves the static frontend from `web/public/`
-- reads existing brief artifacts from `data/` for deep links
+- reads existing brief artifacts from `data/` for the recent-briefs list and deep links
+- removes every saved artifact for a video when it is deleted from the list
 - invokes the unchanged CLI (`python -m consensus.main`) for new analyses
 - streams pipeline progress back to the page as NDJSON
 
@@ -42,12 +43,17 @@ CLI still needs the usual API keys in `.env` before an analysis can run.
 | Route | Description |
 | --- | --- |
 | `GET /api/health` | Liveness plus the resolved data directory and Python path. |
+| `GET /api/briefs` | Recent saved briefs, newest first. |
 | `GET /api/briefs/:videoId/:questionKey` | One saved brief with metrics, distribution, narrative, and top comments. |
+| `DELETE /api/videos/:videoId` | Deletes the raw, processed, analysis, every classification artifact, and archived classification runs for the video, across every research question. |
 | `POST /api/analyze` | Runs the CLI and streams `started`, `stage`, `meta`, `done`, and `error` events. |
 
 ## Notes
 
 - New analyses are written by the CLI to the normal `data/` directories.
+- Deleting a video from Recent briefs opens an in-page confirmation dialog,
+  then removes all of its local artifacts, including briefs saved for other
+  questions about the same video and archived classification runs.
 - The frontend shows the ten most-liked top-level comments. The CLI terminal
   still prints its usual five.
 - Likes are engagement, not agreement. The interface says so wherever they

@@ -47,6 +47,8 @@ const state = {
   run: null,
   result: null,
   token: 0,
+  recentToken: 0,
+  pendingDelete: null,
 };
 
 const ICONS = {
@@ -55,6 +57,7 @@ const ICONS = {
   arrowLeft: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 12H5"/><path d="M11 6l-6 6 6 6"/></svg>`,
   external: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"/></svg>`,
   download: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>`,
+  trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>`,
   check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 12l4 4L19 6"/></svg>`,
 };
 
@@ -183,6 +186,220 @@ function renderFooter() {
   `;
 }
 
+function deleteDialogTemplate() {
+  return `
+    <dialog
+      class="confirm-dialog"
+      id="delete-dialog"
+      aria-labelledby="delete-dialog-title"
+      aria-describedby="delete-dialog-description"
+    >
+      <div class="confirm-dialog-panel">
+        <p class="eyebrow">Destructive action</p>
+        <h2 id="delete-dialog-title">Delete this video’s data?</h2>
+        <p class="confirm-dialog-copy" id="delete-dialog-description">
+          Every saved brief and all collected comments for
+          <strong id="delete-dialog-video"></strong> will be removed from this
+          machine, including runs for other questions. This cannot be undone.
+        </p>
+        <div class="confirm-dialog-actions">
+          <button class="button button-secondary" type="button" data-action="dismiss-delete">Cancel</button>
+          <button class="button button-danger" type="button" data-action="confirm-delete">Delete all data</button>
+        </div>
+      </div>
+    </dialog>
+  `;
+}
+
+function recentTemplate() {
+  return `
+    <section class="recent-section" aria-labelledby="recent-heading">
+      <div class="wrap">
+        <div class="recent-head">
+          <div>
+            <p class="eyebrow">Saved on this machine</p>
+            <h2 id="recent-heading" tabindex="-1">Recent briefs</h2>
+          </div>
+          <span class="mono">Newest first</span>
+        </div>
+        <p class="recent-feedback" id="recent-feedback" role="status" aria-live="polite"></p>
+        <div id="recent-list" aria-live="polite">
+          <p class="recent-status" role="status">Reading saved briefs…</p>
+        </div>
+      </div>
+    </section>
+    ${deleteDialogTemplate()}
+  `;
+}
+
+function recentBriefsTemplate(briefs) {
+  if (!briefs.length) {
+    return `<p class="recent-status">No saved briefs yet. Your first analysis will appear here.</p>`;
+  }
+
+  return `
+    <ol class="recent-list">
+      ${briefs
+        .map(
+          (brief, index) => `
+            <li class="recent-row" data-video-id="${escapeHtml(brief.videoId)}">
+              <button
+                class="recent-item"
+                type="button"
+                data-action="open-brief"
+                data-video-id="${escapeHtml(brief.videoId)}"
+                data-question-key="${escapeHtml(brief.questionKey)}"
+              >
+                <span class="recent-rank">${String(index + 1).padStart(2, "0")}</span>
+                <span class="recent-copy">
+                  <span class="recent-title">${escapeHtml(brief.title || "Untitled YouTube video")}</span>
+                  <span class="recent-question">${brief.question ? `“${escapeHtml(brief.question)}”` : "No question recorded"}</span>
+                </span>
+                <span class="recent-meta">
+                  <span>${escapeHtml(formatDate(brief.generatedAt))}</span>
+                  ${brief.model ? `<span>${escapeHtml(brief.model)}</span>` : ""}
+                </span>
+                ${ICONS.arrowRight}
+              </button>
+              <button
+                class="recent-delete"
+                type="button"
+                data-action="delete-brief"
+                data-video-id="${escapeHtml(brief.videoId)}"
+                data-title="${escapeHtml(brief.title || "Untitled YouTube video")}"
+                aria-label="Delete all saved data for ${escapeHtml(brief.title || "this video")}"
+                title="Delete all saved data for this video"
+              >
+                ${ICONS.trash}
+              </button>
+            </li>
+          `,
+        )
+        .join("")}
+    </ol>
+  `;
+}
+
+function showRecentFeedback(message, { error = false } = {}) {
+  const feedback = document.getElementById("recent-feedback");
+  if (!feedback) return;
+
+  feedback.textContent = message;
+  feedback.classList.toggle("is-error", error);
+}
+
+function closeDeleteDialog() {
+  const dialog = document.getElementById("delete-dialog");
+  if (dialog?.open) dialog.close();
+}
+
+function openDeleteDialog(button) {
+  const dialog = document.getElementById("delete-dialog");
+  const videoId = button.dataset.videoId || "";
+  const title = button.dataset.title || "this video";
+
+  if (
+    !dialog ||
+    typeof dialog.showModal !== "function" ||
+    !/^[A-Za-z0-9_-]{11}$/.test(videoId)
+  ) {
+    return;
+  }
+
+  state.pendingDelete = { button, videoId, title };
+
+  const videoLabel = document.getElementById("delete-dialog-video");
+  if (videoLabel) videoLabel.textContent = `“${title}”`;
+
+  dialog.onclose = () => {
+    const pending = state.pendingDelete;
+    state.pendingDelete = null;
+    if (pending?.button?.isConnected) pending.button.focus();
+  };
+
+  dialog.onclick = (event) => {
+    if (event.target === dialog) closeDeleteDialog();
+  };
+
+  if (!dialog.open) dialog.showModal();
+  dialog.querySelector('[data-action="dismiss-delete"]')?.focus();
+}
+
+async function deleteBriefData(button) {
+  const videoId = button.dataset.videoId || "";
+  const title = button.dataset.title || "this video";
+
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return;
+
+  button.disabled = true;
+  button.classList.add("is-busy");
+  button.setAttribute("aria-busy", "true");
+
+  try {
+    const response = await fetch(`/api/videos/${encodeURIComponent(videoId)}`, {
+      method: "DELETE",
+      headers: { Accept: "application/json" },
+    });
+
+    if (!response.ok) {
+      let message = "That saved video could not be deleted.";
+      try {
+        const payload = await response.json();
+        message = payload.error || message;
+      } catch {
+        // Keep the generic message.
+      }
+      throw new Error(message);
+    }
+
+    const payload = await response.json();
+
+    document.querySelectorAll(".recent-row").forEach((row) => {
+      if (row.dataset.videoId === videoId) row.remove();
+    });
+
+    const list = document.getElementById("recent-list");
+    if (list && !list.querySelector(".recent-row")) {
+      list.innerHTML = `<p class="recent-status" role="status">No saved briefs yet. Your first analysis will appear here.</p>`;
+    }
+
+    const count = Number(payload?.deleted) || 0;
+    showRecentFeedback(
+      `Deleted ${count} saved file${count === 1 ? "" : "s"} for “${title}”.`,
+    );
+    document.getElementById("recent-heading")?.focus({ preventScroll: true });
+  } catch (error) {
+    button.disabled = false;
+    button.classList.remove("is-busy");
+    button.removeAttribute("aria-busy");
+    showRecentFeedback(error.message || "That saved video could not be deleted.", {
+      error: true,
+    });
+  }
+}
+
+async function loadRecentBriefs() {
+  const container = document.getElementById("recent-list");
+  if (!container) return;
+
+  const token = ++state.recentToken;
+
+  try {
+    const response = await fetch("/api/briefs", { headers: { Accept: "application/json" } });
+    if (token !== state.recentToken || state.view !== "home") return;
+    if (!response.ok) throw new Error("Recent briefs are unavailable.");
+
+    const payload = await response.json();
+    if (token !== state.recentToken || state.view !== "home") return;
+
+    const briefs = Array.isArray(payload?.briefs) ? payload.briefs : [];
+    container.innerHTML = recentBriefsTemplate(briefs);
+  } catch {
+    if (token !== state.recentToken || state.view !== "home") return;
+    container.innerHTML = `<p class="recent-status">Recent briefs are unavailable right now.</p>`;
+  }
+}
+
 function homeTemplate() {
   return `
     ${renderNav("home")}
@@ -253,6 +470,7 @@ function homeTemplate() {
           </div>
         </div>
       </section>
+      ${recentTemplate()}
     </main>
     ${renderFooter()}
   `;
@@ -267,6 +485,8 @@ function renderHome() {
 
   if (urlInput) urlInput.value = state.form.url;
   if (questionInput) questionInput.value = state.form.question;
+
+  void loadRecentBriefs();
 }
 
 function progressTemplate() {
@@ -1167,6 +1387,34 @@ document.addEventListener("click", (event) => {
   if (action === "cancel") {
     event.preventDefault();
     goHome({ notice: "Analysis cancelled." });
+    return;
+  }
+
+  if (action === "open-brief") {
+    event.preventDefault();
+    const { videoId, questionKey } = actionTarget.dataset;
+    if (videoId && questionKey) void openBrief(videoId, questionKey);
+    return;
+  }
+
+  if (action === "delete-brief") {
+    event.preventDefault();
+    openDeleteDialog(actionTarget);
+    return;
+  }
+
+  if (action === "dismiss-delete") {
+    event.preventDefault();
+    closeDeleteDialog();
+    return;
+  }
+
+  if (action === "confirm-delete") {
+    event.preventDefault();
+    const pending = state.pendingDelete;
+    if (!pending) return;
+    closeDeleteDialog();
+    void deleteBriefData(pending.button);
     return;
   }
 

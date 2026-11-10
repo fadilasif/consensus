@@ -3,13 +3,13 @@
  * Consensus local web bridge.
  *
  * This process is intentionally thin. It serves the frontend, exposes the
- * existing artifacts as read-only JSON, and invokes the unchanged Python CLI
- * for new analyses. It does not contain analysis, classification, or reporting
- * logic of its own.
+ * existing artifacts as JSON, removes saved artifacts for a video on request,
+ * and invokes the unchanged Python CLI for new analyses. It does not contain
+ * analysis, classification, or reporting logic of its own.
  */
 
 import { createReadStream, existsSync } from "node:fs";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFile, readdir, realpath, rm, stat, unlink } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
@@ -245,6 +245,79 @@ function videoMetrics(analysis, processed, aggregation, snapshot) {
   };
 }
 
+async function listBriefs() {
+  const classifications = path.join(DATA_DIR, "classifications");
+  let entries = [];
+
+  try {
+    entries = await readdir(classifications, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const briefs = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith("_report.json")) continue;
+
+    const prefix = entry.name.slice(0, -"_report.json".length);
+    const match = prefix.match(/^([A-Za-z0-9_-]{11})_([a-f0-9]{16})$/);
+    if (!match) continue;
+
+    const [, videoId, key] = match;
+    const report = await readJson(path.join(classifications, entry.name));
+
+    if (
+      !report ||
+      typeof report !== "object" ||
+      typeof report.report !== "string" ||
+      !report.report.trim()
+    ) {
+      continue;
+    }
+
+    const metadata = await readJson(
+      path.join(classifications, `${prefix}_run_metadata.json`),
+    );
+    const reportSignature = String(report.run_signature || "");
+    const metadataSignature =
+      metadata && typeof metadata === "object"
+        ? String(metadata.run_signature || "")
+        : "";
+
+    // Do not offer briefs that cannot be opened through the single-brief route.
+    if (!reportSignature || reportSignature !== metadataSignature) continue;
+
+    const aggregation = await readJson(
+      path.join(classifications, `${prefix}_aggregation.json`),
+    );
+    const analysis = await readJson(path.join(DATA_DIR, "analysis", `${videoId}.json`));
+    const snapshotVideo =
+      report.video && typeof report.video === "object" ? report.video : {};
+
+    briefs.push({
+      videoId,
+      questionKey: key,
+      title:
+        String(
+          snapshotVideo.title ||
+            aggregation?.video_title ||
+            analysis?.video?.title ||
+            "",
+        ).trim() || `YouTube ${videoId}`,
+      question: String(report.user_question || report.research_question || "").trim(),
+      generatedAt: String(report.generated_at || ""),
+      model: String(report.model || ""),
+    });
+  }
+
+  briefs.sort(
+    (a, b) => (Date.parse(b.generatedAt) || 0) - (Date.parse(a.generatedAt) || 0),
+  );
+
+  return briefs.slice(0, 12);
+}
+
 async function loadBrief(videoId, key) {
   if (!/^[A-Za-z0-9_-]{11}$/.test(videoId) || !/^[a-f0-9]{16}$/.test(key)) {
     return null;
@@ -333,6 +406,104 @@ async function loadBrief(videoId, key) {
       totalReplies: numberOrNull(aggregation?.total_replies_in_video),
     },
   };
+}
+
+function videoArtifactPrefixes(videoId) {
+  return [`${videoId}_`, `.${videoId}_`];
+}
+
+async function collectVideoArtifacts(videoId) {
+  const files = [];
+  const directories = [];
+  const prefixes = videoArtifactPrefixes(videoId);
+  const exactJsonName = `${videoId}.json`;
+
+  async function walk(dir) {
+    let entries;
+
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      const isPrefixed = prefixes.some((prefix) => entry.name.startsWith(prefix));
+
+      if (entry.isDirectory()) {
+        // Archived runs are directories named `<videoId>_<questionKey>_...`.
+        // Removing the whole directory also catches every nested checkpoint.
+        if (isPrefixed) {
+          directories.push(fullPath);
+        } else {
+          await walk(fullPath);
+        }
+        continue;
+      }
+
+      if (isPrefixed || entry.name === exactJsonName) {
+        files.push(fullPath);
+      }
+    }
+  }
+
+  await walk(DATA_DIR);
+
+  return { files, directories };
+}
+
+async function countFilesInDirectory(dir) {
+  let entries;
+
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  let count = 0;
+
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      count += await countFilesInDirectory(path.join(dir, entry.name));
+    } else {
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
+async function deleteVideoData(videoId) {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+    return { invalid: true, deleted: 0 };
+  }
+
+  const { files, directories } = await collectVideoArtifacts(videoId);
+  let deleted = 0;
+
+  for (const file of files) {
+    try {
+      await unlink(file);
+      deleted += 1;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+
+  for (const directory of directories) {
+    const fileCount = await countFilesInDirectory(directory);
+
+    try {
+      await rm(directory, { recursive: true, force: true });
+      deleted += fileCount;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+
+  return { invalid: false, deleted };
 }
 
 function jsonResponse(res, status, payload) {
@@ -751,7 +922,7 @@ async function serveStatic(req, res, pathname) {
     ...SECURITY_HEADERS,
     "Content-Type": contentType,
     "Content-Length": fileStat.size,
-    "Cache-Control": extension === ".html" ? "no-store" : "public, max-age=300",
+    "Cache-Control": "no-store",
   });
 
   if (req.method === "HEAD") {
@@ -785,6 +956,11 @@ const server = createServer(async (req, res) => {
       });
     }
 
+    if (pathname === "/api/briefs") {
+      if (method !== "GET") return jsonResponse(res, 405, { error: "Method not allowed." });
+      return jsonResponse(res, 200, { briefs: await listBriefs() });
+    }
+
     if (pathname.startsWith("/api/briefs/")) {
       if (method !== "GET") return jsonResponse(res, 405, { error: "Method not allowed." });
 
@@ -795,6 +971,22 @@ const server = createServer(async (req, res) => {
       if (!brief) return jsonResponse(res, 404, { error: "Brief not found." });
 
       return jsonResponse(res, 200, { brief });
+    }
+
+    if (pathname.startsWith("/api/videos/")) {
+      if (method !== "DELETE") return jsonResponse(res, 405, { error: "Method not allowed." });
+
+      const parts = pathname.split("/").filter(Boolean);
+      if (parts.length !== 3) return jsonResponse(res, 404, { error: "Video not found." });
+
+      const result = await deleteVideoData(parts[2]);
+      if (result.invalid) return jsonResponse(res, 400, { error: "Invalid video ID." });
+      if (!result.deleted) {
+        return jsonResponse(res, 404, { error: "No saved data for this video." });
+      }
+
+      log(`deleted ${result.deleted} artifact(s) for ${parts[2]}`);
+      return jsonResponse(res, 200, { videoId: parts[2], deleted: result.deleted });
     }
 
     if (pathname === "/api/analyze") {
