@@ -162,6 +162,19 @@ You will be asked for:
 Different questions for the same video are stored separately and never
 overwrite each other, so you can ask as many as you like.
 
+### 🖥️ Web interface
+
+A single-page interface lives in [`web/`](web/README.md). It runs the same
+unchanged CLI behind a small local Node bridge, so the pipeline, storage and
+reporting stay exactly as they are.
+
+```bash
+node web/server.mjs
+```
+
+Then open <http://127.0.0.1:4173>. See [`web/README.md`](web/README.md) for
+configuration and routes.
+
 ---
 
 <a id="output-artifacts"></a>
