@@ -30,7 +30,7 @@
 
 html {
   background: var(--bg);
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 
 body {
@@ -1272,7 +1272,7 @@ ul {
 .aside-block {
   padding-top: 18px;
   border-top: 1px solid var(--line-strong);
-  margin-bottom: 38px;
+  margin-bottom: 18px;
 }
 
 .aside-block h2 {

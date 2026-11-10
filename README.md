@@ -84,8 +84,7 @@ uv sync
 uv pip install .        # or: pip install .
 ```
 
-This installs two console scripts: `consensus` (the pipeline) and
-`consensus-migrate` (a data-migration helper).
+This installs the `consensus` console script (the pipeline).
 
 **🔐 Add your keys**
 
@@ -243,31 +242,6 @@ data/
 
 ---
 
-<a id="migrating-existing-data"></a>
-
-## 🚚 Migrating existing data
-
-If you previously stored data inside `src/consensus/data`, copy it with the
-migration helper:
-
-```bash
-consensus-migrate --dry-run   # show what would be copied
-consensus-migrate             # copy with hash verification
-```
-
-Use `--source` and `--target` to migrate between custom locations, and
-`consensus-migrate --help` for all options.
-
-**🛡️ Safety guarantees**
-
-- ✅ Existing target files are never overwritten.
-- ✅ Identical files are skipped.
-- ✅ Conflicting files are reported, not replaced.
-- ✅ Source files are never deleted.
-- ✅ Every copied file is hash-verified.
-
----
-
 <a id="development"></a>
 
 ## 🛠️ Development
@@ -307,4 +281,4 @@ uv run pytest
 | Run stops partway with a batch error | Re-run with the same video and question. Completed batches are checkpointed and the run resumes. |
 | Run starts from scratch unexpectedly | Something in the run signature changed (comment set, prompts, models or settings). The previous artifacts were archived, not lost. |
 | Can't find your output files | Check which data directory is active (see [Where data is stored](#where-data-is-stored)). |
-| Old data missing after upgrading | Run `consensus-migrate --dry-run`, then `consensus-migrate`. |
+| Old data missing after upgrading | Check the active data directory and ensure no run signature changed. |

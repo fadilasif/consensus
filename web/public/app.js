@@ -574,24 +574,8 @@ function resultTemplate(result) {
                     <div class="stacked-bar" role="img" aria-label="${escapeHtml(distributionLabel)}">${stacked}</div>
                     <p class="relevance-line"><strong>${formatNumber(relevance.relevant)} of ${formatNumber(relevance.classified)}</strong> top-level comments were relevant (${formatPercent(relevance.relevantPercentage)}).</p>
                     <ul class="distribution-list">${distributionRows}</ul>
-                    <p class="source-note">${totalPercentage > 0 ? "Shares are of all classified top-level comments." : "No distribution was available."}</p>
                   `
                   : `<p class="source-note">No classification distribution was available for this brief.</p>`
-              }
-            </section>
-
-            <section class="aside-block" aria-labelledby="scope-heading">
-              <h2 id="scope-heading">What this covers</h2>
-              <ul class="scope-list">
-                <li><strong>Top-level comments only.</strong> Replies are counted, not classified.</li>
-                <li><strong>Likes are engagement.</strong> They are not a measure of agreement.</li>
-                <li><strong>Top comments are context.</strong> They are not a representative sample.</li>
-                <li><strong>Commenters are not viewers.</strong> The brief describes this dataset, not the whole audience.</li>
-              </ul>
-              ${
-                result.questionInterpretation
-                  ? `<details class="question-read"><summary>How the question was read</summary><p>${escapeHtml(result.questionInterpretation)}</p></details>`
-                  : ""
               }
             </section>
 
@@ -639,6 +623,8 @@ function focusMain() {
   if (!target) return;
   target.setAttribute("tabindex", "-1");
   target.focus({ preventScroll: true });
+  // Restore programmatic scroll if focus moved it
+  if (window.scrollY !== 0) window.scrollTo(0, 0);
 }
 
 function setView(view, { scroll = true } = {}) {
